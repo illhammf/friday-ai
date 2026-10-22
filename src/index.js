@@ -6,6 +6,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import whatsapp from 'whatsapp-web.js';
 import qrcode from 'qrcode-terminal';
+import { inspect } from 'node:util';
 
 const { Client, LocalAuth } = whatsapp;
 
@@ -66,9 +67,18 @@ function saveMessage(sessionId, role, content) {
   trimHistory.run(sessionId, sessionId);
 }
 
-function loadHistory(sessionId) {
+function privateSessionId(userId) {
+  return `private:${userId}`;
+}
+
+function groupSessionId(groupId) {
+  return `group:${groupId}`;
+}
+
+function loadHistory(sessionId, limit = 10) {
   return getHistory.all(sessionId)
     .reverse()
+    .slice(-limit)
     .map(({ role, content }) => ({
       role,
       parts: [{ text: content }],
@@ -153,8 +163,8 @@ client.on('message', async (message) => {
     // Jangan membalas pesan dari akun bot sendiri.
     if (message.fromMe || !message.body?.trim()) return;
 
-    const chat = await message.getChat();
-    const isGroup = chat.isGroup;
+    // Identifikasi grup dari ID chat tanpa memanggil getChat().
+    const isGroup = message.from.endsWith('@g.us');
     let question = message.body.trim();
 
     // Grup hanya merespons jika pesan diawali nama bot.
@@ -202,17 +212,27 @@ client.on('message', async (message) => {
     } finally {
       activeChats.delete(sessionId);
     }
-  } catch (error) {
-    console.error('Gagal memproses pesan:', error.message);
+
+    } catch (error) {
+    console.error('\n========== DETAIL ERROR FRIDAY ==========');
+    console.error(inspect(error, {
+        depth: 5,
+        colors: false,
+    }));
+    console.error('Stack:', error?.stack);
+    console.error('=========================================\n');
 
     try {
-      await message.reply(
+        await message.reply(
         'Maaf, aku sedang mengalami kendala. Coba kirim pesan lagi nanti.',
-      );
-    } catch {
-      console.error('Balasan error juga gagal dikirim.');
+        );
+    } catch (replyError) {
+        console.error(
+        'Gagal mengirim pesan cadangan:',
+        inspect(replyError, { depth: 3, colors: false }),
+        );
     }
-  }
+    }
 });
 
 process.on('SIGINT', () => {
