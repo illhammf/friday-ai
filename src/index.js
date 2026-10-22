@@ -85,9 +85,24 @@ function loadHistory(sessionId, limit = 10) {
     }));
 }
 
-async function askFriday(sessionId, question) {
+
+async function askFriday({
+  question,
+  privateSession,
+  sharedGroupSession = null,
+  senderName = 'Pengguna',
+}) {
+  // Memori pribadi hanya berisi percakapan pengguna tersebut.
+  const privateHistory = loadHistory(privateSession, 10);
+
+  // Konteks grup bersifat bersama dan hanya digunakan dalam grup.
+  const groupHistory = sharedGroupSession
+    ? loadHistory(sharedGroupSession, 10)
+    : [];
+
   const contents = [
-    ...loadHistory(sessionId),
+    ...groupHistory,
+    ...privateHistory,
     {
       role: 'user',
       parts: [{ text: question }],
@@ -100,10 +115,20 @@ async function askFriday(sessionId, question) {
     config: {
       systemInstruction: `
 Kamu adalah ${BOT_NAME}, asisten AI pribadi yang ramah,
-cerdas, dan membantu. Jawab menggunakan bahasa pengguna.
-Gunakan riwayat percakapan untuk memahami konteks.
-Untuk pertanyaan sederhana, jawab secara ringkas.
-Jangan mengaku melakukan tindakan yang belum kamu lakukan.
+cerdas, dan membantu.
+
+Pengirim pesan saat ini: ${senderName}.
+Jawab menggunakan bahasa pengguna dan pahami konteks percakapan.
+
+ATURAN FORMAT WHATSAPP:
+- Gunakan *teks* untuk penekanan, bukan **teks**.
+- Gunakan _teks_ untuk penekanan ringan.
+- Tulis rumus matematika dalam teks biasa yang mudah dibaca.
+- Jangan tampilkan pembatas LaTeX seperti $$, \\[, atau \\].
+- Untuk kode, gunakan blok kode dengan tiga backtick jika diperlukan.
+- Gunakan daftar bernomor untuk langkah-langkah.
+- Jangan mengarang referensi, fakta, atau sumber.
+- Jangan mengaku melakukan tindakan yang belum dilakukan.
       `.trim(),
     },
   });
@@ -114,8 +139,15 @@ Jangan mengaku melakukan tindakan yang belum kamu lakukan.
     throw new Error('AI tidak menghasilkan jawaban.');
   }
 
-  saveMessage(sessionId, 'user', question);
-  saveMessage(sessionId, 'model', answer);
+  // Simpan percakapan pribadi secara terpisah.
+  saveMessage(privateSession, 'user', question);
+  saveMessage(privateSession, 'model', answer);
+
+  // Simpan konteks grup untuk percakapan bersama.
+  if (sharedGroupSession) {
+    saveMessage(sharedGroupSession, 'user', `${senderName}: ${question}`);
+    saveMessage(sharedGroupSession, 'model', answer);
+  }
 
   return answer;
 }
