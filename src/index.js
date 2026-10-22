@@ -85,7 +85,7 @@ function loadHistory(sessionId, limit = 10) {
     }));
 }
 
-
+ // Fungsi utama untuk menangani pertanyaan dari pengguna dan mengirimkannya ke model AI.
 async function askFriday({
   question,
   privateSession,
