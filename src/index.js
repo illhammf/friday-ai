@@ -193,15 +193,36 @@ client.on('disconnected', (reason) => {
   console.warn('WhatsApp terputus:', reason);
 });
 
+
 client.on('message', async (message) => {
   try {
-    // Jangan membalas pesan dari akun bot sendiri.
+    // Abaikan pesan dari akun FRIDAY sendiri.
     if (message.fromMe || !message.body?.trim()) return;
 
-    // Grup hanya merespons jika pesan diawali nama bot.
+    // Abaikan pesan yang dikirim sebelum FRIDAY siap.
+    const messageTime = Number(message.timestamp) * 1000;
+
+    if (
+      !fridayReadyAt ||
+      !Number.isFinite(messageTime) ||
+      messageTime <= fridayReadyAt
+    ) {
+      console.log('[Diabaikan] Pesan lama atau waktu pesan tidak valid.');
+      return;
+    }
+
+    const isGroup = message.from.endsWith('@g.us');
+    let question = message.body.trim();
+
+    // Di grup, FRIDAY hanya merespons jika dipanggil.
     if (isGroup) {
+      const escapedName = BOT_NAME.replace(
+        /[.*+?^${}()|[\]\\]/g,
+        '\\$&',
+      );
+
       const prefix = new RegExp(
-        `^${BOT_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b[\\s,:-]*`,
+        `^${escapedName}\\b[\\s,:-]*`,
         'i',
       );
 
@@ -217,14 +238,13 @@ client.on('message', async (message) => {
       }
     }
 
-    // Setiap chat memiliki konteks memori terpisah.
-    const isGroup = message.from.endsWith('@g.us');
-
+    // Identitas pengguna dan grup untuk penyimpanan memori.
     const senderId = isGroup
-      ? message.author
+      ? (message.author || message.from)
       : message.from;
 
     const privateSession = privateSessionId(senderId);
+
     const sharedGroupSession = isGroup
       ? groupSessionId(message.from)
       : null;
@@ -233,7 +253,9 @@ client.on('message', async (message) => {
       ? (message._data?.notifyName || 'Anggota grup')
       : 'Pengguna';
 
-    // Hindari permintaan bersamaan dari chat yang sama.
+    // Batasi satu permintaan aktif per sesi pengguna.
+    const sessionId = privateSession;
+
     if (activeChats.has(sessionId)) {
       await message.reply(
         'Sebentar ya, aku masih memproses pesan sebelumnya.',
@@ -245,13 +267,13 @@ client.on('message', async (message) => {
 
     try {
       console.log(
-        `[Pesan masuk] ${isGroup ? 'Grup' : 'Pribadi'} | ${sessionId}`,
+        `[Pesan baru] ${isGroup ? 'Grup' : 'Pribadi'} | ${sessionId}`,
       );
 
       const answer = await askFriday({
         question,
         privateSession,
-        sharedGroupSession, 
+        sharedGroupSession,
         senderName,
       });
 
@@ -261,27 +283,23 @@ client.on('message', async (message) => {
     } finally {
       activeChats.delete(sessionId);
     }
-
-    } catch (error) {
+  } catch (error) {
     console.error('\n========== DETAIL ERROR FRIDAY ==========');
-    console.error(inspect(error, {
-        depth: 5,
-        colors: false,
-    }));
-    console.error('Stack:', error?.stack);
+    console.error(inspect(error, { depth: 5, colors: false }));
+    console.error(error?.stack);
     console.error('=========================================\n');
 
     try {
-        await message.reply(
+      await message.reply(
         'Maaf, aku sedang mengalami kendala. Coba kirim pesan lagi nanti.',
-        );
+      );
     } catch (replyError) {
-        console.error(
+      console.error(
         'Gagal mengirim pesan cadangan:',
         inspect(replyError, { depth: 3, colors: false }),
-        );
+      );
     }
-    }
+  }
 });
 
 process.on('SIGINT', () => {
