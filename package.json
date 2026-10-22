@@ -1,0 +1,35 @@
+
+{
+  "name": "friday-ai",
+  "version": "1.0.0",
+  "description": "A personal AI assistant for WhatsApp, built with Node.js.",
+  "private": true,
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "check": "node --check src/index.js"
+  },
+  "keywords": [
+    "friday-ai",
+    "whatsapp-bot",
+    "personal-assistant",
+    "artificial-intelligence",
+    "nodejs",
+    "wsl"
+  ],
+  "author": "Ilham Firmansyah",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/illhammf/friday-ai.git"
+  },
+  "bugs": {
+    "url": "https://github.com/illhammf/friday-ai/issues"
+  },
+  "homepage": "https://github.com/illhammf/friday-ai#readme",
+  "engines": {
+    "node": ">=24"
+  }
+}
