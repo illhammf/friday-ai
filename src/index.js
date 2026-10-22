@@ -200,14 +200,24 @@ client.on('message', async (message) => {
     if (message.fromMe || !message.body?.trim()) return;
 
     // Abaikan pesan yang dikirim sebelum FRIDAY siap.
-    const messageTime = Number(message.timestamp) * 1000;
+    const rawTimestamp = Number(message.timestamp);
+    const messageTime = rawTimestamp < 1e12
+      ? rawTimestamp * 1000
+      : rawTimestamp;
 
-    if (
-      !fridayReadyAt ||
-      !Number.isFinite(messageTime) ||
-      messageTime <= fridayReadyAt
-    ) {
-      console.log('[Diabaikan] Pesan lama atau waktu pesan tidak valid.');
+    if (!fridayReadyAt || !Number.isFinite(messageTime)) {
+      console.log('[Diabaikan] Timestamp tidak valid:', {
+        rawTimestamp: message.timestamp,
+        fridayReadyAt,
+      });
+      return;
+    }
+
+    if (messageTime <= fridayReadyAt) {
+      console.log('[Diabaikan] Pesan dikirim sebelum FRIDAY siap:', {
+        messageTime: new Date(messageTime).toISOString(),
+        fridayReadyAt: new Date(fridayReadyAt).toISOString(),
+      });
       return;
     }
 
