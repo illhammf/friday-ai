@@ -195,10 +195,6 @@ client.on('message', async (message) => {
     // Jangan membalas pesan dari akun bot sendiri.
     if (message.fromMe || !message.body?.trim()) return;
 
-    // Identifikasi grup dari ID chat tanpa memanggil getChat().
-    const isGroup = message.from.endsWith('@g.us');
-    let question = message.body.trim();
-
     // Grup hanya merespons jika pesan diawali nama bot.
     if (isGroup) {
       const prefix = new RegExp(
@@ -219,7 +215,20 @@ client.on('message', async (message) => {
     }
 
     // Setiap chat memiliki konteks memori terpisah.
-    const sessionId = `whatsapp:${message.from}`;
+    const isGroup = message.from.endsWith('@g.us');
+
+    const senderId = isGroup
+      ? message.author
+      : message.from;
+
+    const privateSession = privateSessionId(senderId);
+    const sharedGroupSession = isGroup
+      ? groupSessionId(message.from)
+      : null;
+
+    const senderName = isGroup
+      ? (message._data?.notifyName || 'Anggota grup')
+      : 'Pengguna';
 
     // Hindari permintaan bersamaan dari chat yang sama.
     if (activeChats.has(sessionId)) {
@@ -236,7 +245,12 @@ client.on('message', async (message) => {
         `[Pesan masuk] ${isGroup ? 'Grup' : 'Pribadi'} | ${sessionId}`,
       );
 
-      const answer = await askFriday(sessionId, question);
+      const answer = await askFriday({
+        question,
+        privateSession,
+        sharedGroupSession, 
+        senderName,
+      });
 
       await message.reply(answer);
 
