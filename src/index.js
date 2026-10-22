@@ -177,13 +177,19 @@ client.on('authenticated', () => {
   console.log('Autentikasi WhatsApp berhasil.');
 });
 
+
 client.on('ready', () => {
+  // Simpan waktu aktif dalam satuan detik, sesuai timestamp WhatsApp.
+  fridayReadyAt = Math.floor(Date.now() / 1000);
+
   console.log(`\n${BOT_NAME} terhubung ke WhatsApp.`);
   console.log(`Model AI: ${MODEL}`);
   console.log('Chat pribadi: aktif.');
-  console.log('Grup: panggil dengan awalan "Friday".\n');
-  console.log('Pesan lama tidak akan dibalas setelah bot aktif.\n');
+  console.log('Grup: panggil dengan awalan "Friday".');
+  console.log(`Waktu siap: ${fridayReadyAt}`);
+  console.log('Pesan sebelum waktu siap akan diabaikan.\n');
 });
+
 
 client.on('auth_failure', (message) => {
   console.error('Autentikasi gagal:', message);
