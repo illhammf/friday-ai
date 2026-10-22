@@ -1,11 +1,10 @@
-
 {
   "name": "friday-ai",
   "version": "1.0.0",
   "description": "A personal AI assistant for WhatsApp, built with Node.js.",
   "private": true,
   "main": "src/index.js",
-  "type": "commonjs",
+  "type": "module",
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
@@ -31,5 +30,9 @@
   "homepage": "https://github.com/illhammf/friday-ai#readme",
   "engines": {
     "node": ">=24"
+  },
+  "dependencies": {
+    "@google/genai": "^2.30.0",
+    "dotenv": "^18.0.8"
   }
 }
