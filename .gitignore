@@ -1,0 +1,31 @@
+
+# Environment variables and secrets / Untuk variabel lingkungan dan rahasia
+.env
+.env.*
+!.env.example
+
+# WhatsApp authentication sessions / Untuk sesi autentikasi WhatsApp
+.auth_info/
+.sessions/
+.wwebjs_auth/
+.wwebjs_cache/
+auth_info/
+sessions/
+
+# Dependencies / Untuk dependensi
+node_modules/
+
+# Logs / Untuk log
+logs/
+*.log
+npm-debug.log*
+
+# Build and coverage / Untuk build dan cakupan
+dist/
+coverage/
+
+# Operating system and editor files / Untuk file sistem operasi dan editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
