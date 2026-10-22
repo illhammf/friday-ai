@@ -163,7 +163,9 @@ const client = new Client({
   },
 });
 
+// Untuk mencegah permintaan bersamaan dari chat yang sama, kita menggunakan Set untuk melacak chat aktif.
 const activeChats = new Set();
+let fridayReadyAt = 0;
 
 client.on('qr', (qr) => {
   console.log('\nPindai QR ini menggunakan WhatsApp FRIDAY:');
@@ -180,6 +182,7 @@ client.on('ready', () => {
   console.log(`Model AI: ${MODEL}`);
   console.log('Chat pribadi: aktif.');
   console.log('Grup: panggil dengan awalan "Friday".\n');
+  console.log('Pesan lama tidak akan dibalas setelah bot aktif.\n');
 });
 
 client.on('auth_failure', (message) => {
