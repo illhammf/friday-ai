@@ -206,23 +206,24 @@ client.on('message', async (message) => {
     if (message.fromMe || !message.body?.trim()) return;
 
     // Abaikan pesan yang dikirim sebelum FRIDAY siap.
-    const rawTimestamp = Number(message.timestamp);
-    const messageTime = rawTimestamp < 1e12
-      ? rawTimestamp * 1000
-      : rawTimestamp;
+    const messageTime = Number(message.timestamp);
 
-    if (!fridayReadyAt || !Number.isFinite(messageTime)) {
+    if (
+      !fridayReadyAt ||
+      !Number.isFinite(messageTime) ||
+      messageTime <= 0
+    ) {
       console.log('[Diabaikan] Timestamp tidak valid:', {
-        rawTimestamp: message.timestamp,
+        messageTime,
         fridayReadyAt,
       });
       return;
     }
 
-    if (messageTime <= fridayReadyAt) {
+    if (messageTime < fridayReadyAt) {
       console.log('[Diabaikan] Pesan dikirim sebelum FRIDAY siap:', {
-        messageTime: new Date(messageTime).toISOString(),
-        fridayReadyAt: new Date(fridayReadyAt).toISOString(),
+        messageTime,
+        fridayReadyAt,
       });
       return;
     }
