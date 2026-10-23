@@ -270,7 +270,12 @@ client.on('disconnected', (reason) => {
 client.on('message', async (message) => {
   try {
     // Abaikan pesan dari akun FRIDAY sendiri.
-    if (message.fromMe || !message.body?.trim()) return;
+    if (message.fromMe) return;
+
+    const isVoiceNote = message.type === 'ptt';
+    const hasText = Boolean(message.body?.trim());
+
+    if (!isVoiceNote && !hasText) return;
 
     // Abaikan pesan yang dikirim sebelum FRIDAY siap.
     const messageTime = Number(message.timestamp);
