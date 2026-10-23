@@ -7,6 +7,8 @@ import { join } from 'node:path';
 import whatsapp from 'whatsapp-web.js';
 import qrcode from 'qrcode-terminal';
 import { inspect } from 'node:util';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 
 const { Client, LocalAuth } = whatsapp;
 
