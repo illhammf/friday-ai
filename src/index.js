@@ -135,6 +135,27 @@ function loadHistory(sessionId, limit = 10) {
     }));
 }
 
+// Jika pesan adalah Voice Note, unduh dan transkripsikan.
+if (isVoiceNote) {
+  const media = await message.downloadMedia();
+
+  if (!media) {
+    await message.reply('Maaf, Voice Note tidak bisa diunduh.');
+    return;
+  }
+
+  const transcript = await transcribeVoiceNote(media);
+
+  console.log('[Transkripsi Voice Note]', transcript);
+
+  // Caption "Friday" di grup hanya menjadi pemicu, bukan isi pertanyaan.
+  question = question
+    ? `${question}\n\nIsi Voice Note: ${transcript}`
+    : transcript;
+
+  if (isGroup && !question.trim()) return;
+}
+
  // Fungsi utama untuk menangani pertanyaan dari pengguna dan mengirimkannya ke model AI.
 async function askFriday({
   question,
