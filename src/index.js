@@ -366,10 +366,6 @@ client.on('message', async (message) => {
 
     const isVoiceNote = message.type === 'ptt';
     const hasText = Boolean(message.body?.trim());
-    const asksForVoice =
-    /\b(?:voice[\s-]?note|vn|pesan suara|voice reply)\b/i.test(question) ||
-    /\b(?:balas|jawab)(?:lah)?\s+(?:dengan|pakai|menggunakan)\s+(?:suara|voice\s*note)\b/i.test(question) ||
-    /\bmenggunakan\s+voice\s*note\b/i.test(question);
 
     if (!isVoiceNote && !hasText) return;
 
