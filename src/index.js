@@ -358,7 +358,7 @@ client.on('disconnected', (reason) => {
   console.warn('WhatsApp terputus:', reason);
 });
 
-
+// Header Pesanan: untuk menangani pesan masuk dari pengguna dan grup.
 client.on('message', async (message) => {
   try {
     // Abaikan pesan dari akun FRIDAY sendiri.
@@ -366,6 +366,10 @@ client.on('message', async (message) => {
 
     const isVoiceNote = message.type === 'ptt';
     const hasText = Boolean(message.body?.trim());
+    const asksForVoice =
+    /\b(?:voice[\s-]?note|vn|pesan suara|voice reply)\b/i.test(question) ||
+    /\b(?:balas|jawab)(?:lah)?\s+(?:dengan|pakai|menggunakan)\s+(?:suara|voice\s*note)\b/i.test(question) ||
+    /\bmenggunakan\s+voice\s*note\b/i.test(question);
 
     if (!isVoiceNote && !hasText) return;
 
@@ -473,6 +477,7 @@ client.on('message', async (message) => {
         `[Pesan baru] ${isGroup ? 'Grup' : 'Pribadi'} | ${sessionId}`,
       );
 
+      // Untuk mengirim pertanyaan ke model AI dan mendapatkan jawaban.
       const answer = await askFriday({
         question,
         privateSession,
@@ -480,10 +485,43 @@ client.on('message', async (message) => {
         senderName,
       });
 
-      await message.reply(answer);
+      // Voice Note masuk atau permintaan suara dari pengguna
+      // akan dibalas menggunakan audio.
+      const asksForVoice =
+        /\b(?:voice[\s-]?note|vn|pesan suara|voice reply)\b/i.test(question) ||
+        /\b(?:balas|jawab)(?:lah)?\s+(?:dengan|pakai|menggunakan)\s+(?:suara|voice\s*note)\b/i.test(question) ||
+        /\bmenggunakan\s+voice\s*note\b/i.test(question);
 
-      console.log('[Pesan terkirim] Jawaban FRIDAY berhasil dikirim.\n');
-    } finally {
+      if (isVoiceNote || asksForVoice) {
+        let audioResult;
+
+        try {
+          audioResult = await generateVoiceNote(answer);
+
+          const audioMedia = MessageMedia.fromFilePath(audioResult.path);
+
+          await client.sendMessage(message.from, audioMedia, {
+            sendAudioAsVoice: true,
+          });
+
+          console.log('[Pesan terkirim] Voice Note berhasil dikirim.');
+        } catch (error) {
+          console.error('[TTS gagal]', error.message);
+
+          await message.reply(
+            `Maaf, suara belum bisa dibuat. Ini jawaban teksnya:\n\n${answer}`,
+          );
+        } finally {
+          if (audioResult) {
+            await audioResult.cleanup();
+          }
+        }
+      } else {
+        await message.reply(answer);
+        console.log('[Pesan terkirim] Jawaban teks berhasil dikirim.');
+      }
+    } 
+    finally {
       activeChats.delete(sessionId);
     }
 
