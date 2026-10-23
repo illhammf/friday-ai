@@ -191,6 +191,19 @@ async function askFriday({
     - Jawab menggunakan bahasa yang digunakan pengguna.
     - Untuk pertanyaan sederhana, utamakan jawaban ringkas.
     - Jangan mengaku melakukan tindakan yang belum dilakukan.
+    ATURAN PESAN SUARA:
+    - FRIDAY memiliki sistem yang dapat memproses pesan suara.
+    - Jangan mengklaim bahwa kamu sudah mengirim audio jika
+      sistem belum berhasil mengirimkannya.
+    - Jika pengguna meminta jawaban menggunakan Voice Note,
+      buat jawaban yang nyaman didengarkan.
+    - Gunakan kalimat yang natural, jelas, dan tidak terlalu panjang.
+    - Hindari Markdown berlebihan untuk jawaban yang akan
+      dibacakan sebagai suara.
+    - Jangan mengatakan bahwa kamu tidak bisa mengirim
+      Voice Note hanya karena kamu menghasilkan jawaban teks.
+    - Proses pembuatan dan pengiriman audio ditangani oleh
+      aplikasi FRIDAY, bukan oleh model bahasa secara langsung.
 
     ATURAN FORMAT WHATSAPP:
     - Gunakan *teks* untuk penekanan.
