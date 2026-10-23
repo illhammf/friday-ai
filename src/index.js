@@ -316,11 +316,12 @@ client.on('message', async (message) => {
         'i',
       );
 
+      // Voice Note grup untuk sementara harus memakai caption "Friday".
       if (!prefix.test(question)) return;
 
       question = question.replace(prefix, '').trim();
 
-      if (!question) {
+      if (!question && !isVoiceNote) {
         await message.reply(
           `Halo! Aku ${BOT_NAME}. Ada yang bisa kubantu?`,
         );
