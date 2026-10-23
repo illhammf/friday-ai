@@ -300,8 +300,9 @@ client.on('message', async (message) => {
       return;
     }
 
+    // Periksa apakah pesan berasal dari grup atau chat pribadi.
     const isGroup = message.from.endsWith('@g.us');
-    let question = message.body.trim();
+    let question = message.body?.trim() || '';
 
     // Di grup, FRIDAY hanya merespons jika dipanggil.
     if (isGroup) {
