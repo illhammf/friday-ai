@@ -10,7 +10,7 @@ import { inspect } from 'node:util';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 
-const { Client, LocalAuth } = whatsapp;
+const { Client, LocalAuth, MessageMedia } = whatsapp;
 
 const BOT_NAME = process.env.BOT_NAME || 'Friday';
 const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
@@ -68,6 +68,84 @@ async function transcribeVoiceNote(media) { // Untuk transkripsi catatan suara, 
       recursive: true,
       force: true,
     });
+  }
+}
+
+async function generateVoiceNote(text) {
+  const temporaryDirectory = await mkdtemp(
+    join(tmpdir(), 'friday-tts-'),
+  );
+
+  const wavPath = join(temporaryDirectory, 'answer.wav');
+  const oggPath = join(temporaryDirectory, 'answer.ogg');
+
+  try {
+    const interaction = await ai.interactions.create({
+      model: 'gemini-3.8-flash-tts',
+      input: [
+        {
+          type: 'user_input',
+          content: [
+            {
+              type: 'text',
+              text: text.slice(0, 4000),
+              annotations: [
+                {
+                  type: 'speech_metadata',
+                  style: 'warm, friendly, clear, and conversational',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      response_format: { type: 'audio' },
+      generation_config: {
+        speech_config: [
+          { voice: 'Kore' },
+        ],
+      },
+    });
+
+    if (!interaction.output_audio?.data) {
+      throw new Error('Gemini tidak menghasilkan data audio.');
+    }
+
+    await writeFile(
+      wavPath,
+      Buffer.from(interaction.output_audio.data, 'base64'),
+    );
+
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const execFileAsync = promisify(execFile);
+
+    await execFileAsync('ffmpeg', [
+      '-y',
+      '-i', wavPath,
+      '-vn',
+      '-c:a', 'libopus',
+      '-b:a', '32k',
+      '-vbr', 'on',
+      '-application', 'voip',
+      '-ac', '1',
+      '-ar', '48000',
+      oggPath,
+    ]);
+
+    return {
+      path: oggPath,
+      cleanup: () => rm(temporaryDirectory, {
+        recursive: true,
+        force: true,
+      }),
+    };
+  } catch (error) {
+    await rm(temporaryDirectory, {
+      recursive: true,
+      force: true,
+    });
+    throw error;
   }
 }
 
