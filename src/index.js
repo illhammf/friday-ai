@@ -893,9 +893,10 @@ client.on('message', async (message) => {
     if (message.fromMe) return;
 
     const isVoiceNote = message.type === 'ptt';
+    const isImage = message.type === 'image';
     const hasText = Boolean(message.body?.trim());
 
-    if (!isVoiceNote && !hasText) return;
+    if (!isVoiceNote && !isImage && !hasText) return;
 
     // Abaikan pesan sebelum FRIDAY siap.
     const messageTime = Number(message.timestamp);
