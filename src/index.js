@@ -922,7 +922,12 @@ client.on('message', async (message) => {
 
     // Identifikasi chat pribadi atau grup.
     const isGroup = message.from.endsWith('@g.us');
-    let question = message.body?.trim() || '';
+    if (!question && !isVoiceNote && !isImage) {
+      await message.reply(
+        `Halo! Aku ${BOT_NAME}. Ada yang bisa kubantu?`
+      );
+      return;
+    }
 
     // Di grup, pesan harus diawali nama FRIDAY.
     if (isGroup) {
