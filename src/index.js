@@ -92,7 +92,7 @@ async function generateVoiceNote(text) {
               annotations: [
                 {
                   type: 'speech_metadata',
-                  style: 'A calm, intelligent, futuristic female AI assistant. Speak with a composed, confident, polished and natural delivery. Use measured pacing, clear articulation, subtle warmth, and controlled intonation. Avoid exaggerated emotion or an overly cheerful customer-service tone.',
+                  style: 'A calm, intelligent, feminine-sounding futuristic AI assistant. Speak Indonesian naturally, with clear articulation, measured pacing, subtle warmth, and confident but gentle intonation. Sound composed, polished, and professional. Avoid exaggerated emotion and an overly cheerful tone.',
                 },
               ],
             },
