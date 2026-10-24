@@ -874,34 +874,81 @@ client.on('message', async (message) => {
         /\b(?:balas|jawab)(?:lah)?\s+(?:dengan|pakai|menggunakan)\s+(?:suara|voice\s*note)\b/i.test(question) ||
         /\bmenggunakan\s+voice\s*note\b/i.test(question);
 
-      if (isVoiceNote || asksForVoice) {
-        let audioResult;
 
-        try {
-          audioResult = await generateVoiceNote(answer);
+        if (isVoiceNote || asksForVoice) {
+          let audioResult = null;
 
-          const audioMedia = MessageMedia.fromFilePath(audioResult.path);
+          try {
+            audioResult = await generateVoiceNote(answer);
 
-          await client.sendMessage(message.from, audioMedia, {
-            sendAudioAsVoice: true,
-          });
+            const audioMedia = MessageMedia.fromFilePath(
+              audioResult.path
+            );
 
-          console.log('[Pesan terkirim] Voice Note berhasil dikirim.');
-        } catch (error) {
-          console.error('[TTS gagal]', error.message);
+            await client.sendMessage(message.from, audioMedia, {
+              sendAudioAsVoice: true,
+            });
 
-          await message.reply(
-            `Maaf, suara belum bisa dibuat. Ini jawaban teksnya:\n\n${answer}`,
-          );
-        } finally {
-          if (audioResult) {
-            await audioResult.cleanup();
+            console.log(
+              '[Pesan terkirim] Voice Note berhasil dikirim.'
+            );
+
+          } catch (error) {
+            const errorMessage = String(
+              error?.message || error
+            );
+
+            const isRateLimit =
+              error?.status === 429 ||
+              /\b429\b|rate.?limit|quota exceeded/i.test(
+                errorMessage
+              );
+
+            console.error('[TTS gagal]', errorMessage);
+
+            if (isRateLimit) {
+              console.warn(
+                '[TTS] Batas penggunaan tercapai. Beralih ke teks.'
+              );
+            }
+
+            try {
+              await message.reply(
+                `Maaf, Voice Note belum bisa dibuat saat ini. Ini jawaban teksnya:\n\n${answer}`
+              );
+
+              console.log(
+                '[Fallback] Jawaban teks berhasil dikirim.'
+              );
+
+            } catch (replyError) {
+              console.error(
+                '[Fallback teks gagal]',
+                replyError?.message || replyError
+              );
+            }
+
+          } finally {
+            if (audioResult?.cleanup) {
+              try {
+                await audioResult.cleanup();
+              } catch (cleanupError) {
+                console.error(
+                  '[Cleanup audio gagal]',
+                  cleanupError?.message || cleanupError
+                );
+              }
+            }
           }
+
+        } else {
+          await message.reply(answer);
+
+          console.log(
+            '[Pesan terkirim] Jawaban teks berhasil dikirim.'
+          );
         }
-      } else {
-        await message.reply(answer);
-        console.log('[Pesan terkirim] Jawaban teks berhasil dikirim.');
-      }
+
     } 
     finally {
       activeChats.delete(sessionId);
