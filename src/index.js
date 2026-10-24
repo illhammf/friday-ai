@@ -755,7 +755,7 @@ client.on('message', async (message) => {
 
     if (!isVoiceNote && !hasText) return;
 
-    // Abaikan pesan yang dikirim sebelum FRIDAY siap.
+    // Abaikan pesan sebelum FRIDAY siap.
     const messageTime = Number(message.timestamp);
 
     if (
@@ -771,43 +771,47 @@ client.on('message', async (message) => {
     }
 
     if (messageTime < fridayReadyAt) {
-      console.log('[Diabaikan] Pesan dikirim sebelum FRIDAY siap:', {
-        messageTime,
-        fridayReadyAt,
-      });
+      console.log(
+        '[Diabaikan] Pesan dikirim sebelum FRIDAY siap.'
+      );
       return;
     }
 
-    // Periksa apakah pesan berasal dari grup atau chat pribadi.
+    // Identifikasi chat pribadi atau grup.
     const isGroup = message.from.endsWith('@g.us');
     let question = message.body?.trim() || '';
 
-    // Di grup, FRIDAY hanya merespons jika dipanggil.
+    // Di grup, pesan harus diawali nama FRIDAY.
     if (isGroup) {
       const escapedName = BOT_NAME.replace(
         /[.*+?^${}()|[\]\\]/g,
-        '\\$&',
+        '\\$&'
       );
 
       const prefix = new RegExp(
         `^${escapedName}\\b[\\s,:-]*`,
-        'i',
+        'i'
       );
 
-      // Voice Note grup untuk sementara harus memakai caption "Friday".
-      if (!prefix.test(question)) return;
+      if (!prefix.test(question)) {
+        console.log(
+          '[Diabaikan] FRIDAY tidak dipanggil di grup.'
+        );
+        return;
+      }
 
       question = question.replace(prefix, '').trim();
 
+      // Sapaan teks tanpa pertanyaan.
       if (!question && !isVoiceNote) {
         await message.reply(
-          `Halo! Aku ${BOT_NAME}. Ada yang bisa kubantu?`,
+          `Halo! Aku ${BOT_NAME}. Ada yang bisa kubantu?`
         );
         return;
       }
     }
 
-    // Identitas pengguna dan grup untuk penyimpanan memori.
+    // Identitas dan sesi percakapan.
     const senderId = isGroup
       ? (message.author || message.from)
       : message.from;
@@ -822,44 +826,53 @@ client.on('message', async (message) => {
       ? (message._data?.notifyName || 'Anggota grup')
       : 'Pengguna';
 
-    // Batasi satu permintaan aktif per sesi pengguna.
+    // Cegah permintaan bersamaan dari sesi pengguna yang sama.
     const sessionId = privateSession;
 
     if (activeChats.has(sessionId)) {
       await message.reply(
-        'Sebentar ya, aku masih memproses pesan sebelumnya.',
+        'Sebentar ya, aku masih memproses pesan sebelumnya.'
       );
       return;
     }
 
-    // Tandai sesi ini sebagai aktif.
     activeChats.add(sessionId);
 
     try {
-      // Jika pesan adalah Voice Note, unduh dan transkripsikan.
+      // Unduh dan transkripsikan Voice Note masuk.
       if (isVoiceNote) {
         const media = await message.downloadMedia();
 
         if (!media) {
-          await message.reply('Maaf, Voice Note tidak bisa diunduh.');
+          await message.reply(
+            'Maaf, Voice Note tidak bisa diunduh. Coba kirim ulang ya.'
+          );
           return;
         }
 
-        const transcript = await transcribeVoiceNote(media);
+        const transcript = (
+          await transcribeVoiceNote(media)
+        )?.trim();
+
+        if (!transcript) {
+          await message.reply(
+            'Maaf, isi Voice Note belum bisa kupahami. Coba kirim ulang atau tuliskan pesannya ya.'
+          );
+          return;
+        }
 
         console.log('[Transkripsi Voice Note]', transcript);
 
-        // Gunakan hasil transkripsi sebagai pertanyaan FRIDAY.
         question = question
           ? `${question}\n\nIsi Voice Note: ${transcript}`
           : transcript;
       }
 
       console.log(
-        `[Pesan baru] ${isGroup ? 'Grup' : 'Pribadi'} | ${sessionId}`,
+        `[Pesan baru] ${isGroup ? 'Grup' : 'Pribadi'} | ${sessionId}`
       );
 
-      // Untuk mengirim pertanyaan ke model AI dan mendapatkan jawaban.
+      // Kirim pertanyaan ke model AI.
       const answer = await askFriday({
         question,
         privateSession,
@@ -867,107 +880,116 @@ client.on('message', async (message) => {
         senderName,
       });
 
-      // Voice Note masuk atau permintaan suara dari pengguna
-      // akan dibalas menggunakan audio.
+      // Deteksi permintaan balasan suara.
       const asksForVoice =
         /\b(?:voice[\s-]?note|vn|pesan suara|voice reply)\b/i.test(question) ||
         /\b(?:balas|jawab)(?:lah)?\s+(?:dengan|pakai|menggunakan)\s+(?:suara|voice\s*note)\b/i.test(question) ||
         /\bmenggunakan\s+voice\s*note\b/i.test(question);
 
+      // VN masuk selalu dibalas dengan VN jika memungkinkan.
+      if (isVoiceNote || asksForVoice) {
+        let audioResult = null;
 
-        if (isVoiceNote || asksForVoice) {
-          let audioResult = null;
+        try {
+          audioResult = await generateVoiceNote(answer);
 
-          try {
-            audioResult = await generateVoiceNote(answer);
+          const audioMedia = MessageMedia.fromFilePath(
+            audioResult.path
+          );
 
-            const audioMedia = MessageMedia.fromFilePath(
-              audioResult.path
-            );
-
-            await client.sendMessage(message.from, audioMedia, {
-              sendAudioAsVoice: true,
-            });
-
-            console.log(
-              '[Pesan terkirim] Voice Note berhasil dikirim.'
-            );
-
-          } catch (error) {
-            const errorMessage = String(
-              error?.message || error
-            );
-
-            const isRateLimit =
-              error?.status === 429 ||
-              /\b429\b|rate.?limit|quota exceeded/i.test(
-                errorMessage
-              );
-
-            console.error('[TTS gagal]', errorMessage);
-
-            if (isRateLimit) {
-              console.warn(
-                '[TTS] Batas penggunaan tercapai. Beralih ke teks.'
-              );
-            }
-
-            try {
-              await message.reply(
-                `Maaf, Voice Note belum bisa dibuat saat ini. Ini jawaban teksnya:\n\n${answer}`
-              );
-
-              console.log(
-                '[Fallback] Jawaban teks berhasil dikirim.'
-              );
-
-            } catch (replyError) {
-              console.error(
-                '[Fallback teks gagal]',
-                replyError?.message || replyError
-              );
-            }
-
-          } finally {
-            if (audioResult?.cleanup) {
-              try {
-                await audioResult.cleanup();
-              } catch (cleanupError) {
-                console.error(
-                  '[Cleanup audio gagal]',
-                  cleanupError?.message || cleanupError
-                );
-              }
-            }
-          }
-
-        } else {
-          await message.reply(answer);
+          await client.sendMessage(message.from, audioMedia, {
+            sendAudioAsVoice: true,
+          });
 
           console.log(
-            '[Pesan terkirim] Jawaban teks berhasil dikirim.'
+            '[Pesan terkirim] Voice Note berhasil dikirim.'
           );
+
+        } catch (error) {
+          const errorMessage = String(
+            error?.message || error
+          );
+
+          const isRateLimit =
+            error?.status === 429 ||
+            /\b429\b|rate.?limit|quota exceeded/i.test(
+              errorMessage
+            );
+
+          console.error('[TTS/pengiriman audio gagal]', errorMessage);
+
+          if (isRateLimit) {
+            console.warn(
+              '[TTS] Batas penggunaan tercapai. Beralih ke teks.'
+            );
+          }
+
+          try {
+            await message.reply(
+              `Maaf, Voice Note belum bisa dikirim saat ini. Ini jawaban teksnya:\n\n${answer}`
+            );
+
+            console.log(
+              '[Fallback] Jawaban teks berhasil dikirim.'
+            );
+
+          } catch (replyError) {
+            console.error(
+              '[Fallback teks gagal]',
+              replyError?.message || replyError
+            );
+          }
+
+        } finally {
+          if (audioResult?.cleanup) {
+            try {
+              await audioResult.cleanup();
+            } catch (cleanupError) {
+              console.error(
+                '[Cleanup audio gagal]',
+                cleanupError?.message || cleanupError
+              );
+            }
+          }
         }
 
-    } 
-    finally {
+      } else {
+        await message.reply(answer);
+
+        console.log(
+          '[Pesan terkirim] Jawaban teks berhasil dikirim.'
+        );
+      }
+
+    } finally {
+      // Pastikan sesi tidak terkunci jika terjadi error.
       activeChats.delete(sessionId);
     }
 
   } catch (error) {
-    console.error('\n========== DETAIL ERROR FRIDAY ==========');
-    console.error(inspect(error, { depth: 5, colors: false }));
+    console.error(
+      '\n========== DETAIL ERROR FRIDAY =========='
+    );
+    console.error(inspect(error, {
+      depth: 5,
+      colors: false,
+    }));
     console.error(error?.stack);
-    console.error('=========================================\n');
+    console.error(
+      '=========================================\n'
+    );
 
     try {
       await message.reply(
-        'Maaf, aku sedang mengalami kendala. Coba kirim pesan lagi nanti.',
+        'Maaf, aku sedang mengalami kendala. Coba kirim pesan lagi nanti.'
       );
     } catch (replyError) {
       console.error(
         'Gagal mengirim pesan cadangan:',
-        inspect(replyError, { depth: 3, colors: false }),
+        inspect(replyError, {
+          depth: 3,
+          colors: false,
+        })
       );
     }
   }
