@@ -102,7 +102,7 @@ async function generateVoiceNote(text) {
       response_format: { type: 'audio' },
       generation_config: {
         speech_config: [
-          { voice: 'Erinome' }, // Bisa juga Laomedeia, Kore, Achernar, Erinome, atau lainnya sesuai dokumentasi Gemini TTS.
+          { voice: 'Despina' }, // Bisa juga Laomedeia, Kore, Achernar, Erinome, Despina atau lainnya sesuai dokumentasi Gemini TTS.
         ],
       },
     });
