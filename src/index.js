@@ -886,17 +886,22 @@ client.on('disconnected', (reason) => {
   console.warn('WhatsApp terputus:', reason);
 });
 
-// Header Pesanan: untuk menangani pesan masuk dari pengguna dan grup.
+
 client.on('message', async (message) => {
   try {
     // Abaikan pesan dari akun FRIDAY sendiri.
     if (message.fromMe) return;
 
+    // Identifikasi jenis pesan.
     const isVoiceNote = message.type === 'ptt';
     const isImage = message.type === 'image';
     const hasText = Boolean(message.body?.trim());
 
+    // Abaikan pesan yang tidak didukung.
     if (!isVoiceNote && !isImage && !hasText) return;
+
+    // Definisikan pertanyaan sebelum digunakan.
+    let question = message.body?.trim() || '';
 
     // Abaikan pesan sebelum FRIDAY siap.
     const messageTime = Number(message.timestamp);
@@ -922,12 +927,6 @@ client.on('message', async (message) => {
 
     // Identifikasi chat pribadi atau grup.
     const isGroup = message.from.endsWith('@g.us');
-    if (!question && !isVoiceNote && !isImage) {
-      await message.reply(
-        `Halo! Aku ${BOT_NAME}. Ada yang bisa kubantu?`
-      );
-      return;
-    }
 
     // Di grup, pesan harus diawali nama FRIDAY.
     if (isGroup) {
@@ -951,12 +950,18 @@ client.on('message', async (message) => {
       question = question.replace(prefix, '').trim();
 
       // Sapaan teks tanpa pertanyaan.
-      if (!question && !isVoiceNote) {
+      if (!question && !isVoiceNote && !isImage) {
         await message.reply(
           `Halo! Aku ${BOT_NAME}. Ada yang bisa kubantu?`
         );
         return;
       }
+    } else if (!question && !isVoiceNote && !isImage) {
+      // Sapaan kosong di chat pribadi.
+      await message.reply(
+        `Halo! Aku ${BOT_NAME}. Ada yang bisa kubantu?`
+      );
+      return;
     }
 
     // Identitas dan sesi percakapan.
@@ -1016,7 +1021,7 @@ client.on('message', async (message) => {
           : transcript;
       }
 
-      // Unduh gambar jika ada.
+      // Unduh gambar untuk analisis Vision AI.
       let image = null;
 
       if (isImage) {
@@ -1050,12 +1055,13 @@ client.on('message', async (message) => {
         `[Pesan baru] ${isGroup ? 'Grup' : 'Pribadi'} | ${sessionId}`
       );
 
-      // Kirim pertanyaan ke model AI.
+      // Kirim pertanyaan beserta gambar ke model AI.
       const answer = await askFriday({
         question,
         privateSession,
         sharedGroupSession,
         senderName,
+        image,
       });
 
       // Deteksi permintaan balasan suara.
@@ -1082,7 +1088,6 @@ client.on('message', async (message) => {
           console.log(
             '[Pesan terkirim] Voice Note berhasil dikirim.'
           );
-
         } catch (error) {
           const errorMessage = String(
             error?.message || error
@@ -1094,7 +1099,10 @@ client.on('message', async (message) => {
               errorMessage
             );
 
-          console.error('[TTS/pengiriman audio gagal]', errorMessage);
+          console.error(
+            '[TTS/pengiriman audio gagal]',
+            errorMessage
+          );
 
           if (isRateLimit) {
             console.warn(
@@ -1110,14 +1118,12 @@ client.on('message', async (message) => {
             console.log(
               '[Fallback] Jawaban teks berhasil dikirim.'
             );
-
           } catch (replyError) {
             console.error(
               '[Fallback teks gagal]',
               replyError?.message || replyError
             );
           }
-
         } finally {
           if (audioResult?.cleanup) {
             try {
@@ -1130,7 +1136,6 @@ client.on('message', async (message) => {
             }
           }
         }
-
       } else {
         await message.reply(answer);
 
@@ -1138,20 +1143,20 @@ client.on('message', async (message) => {
           '[Pesan terkirim] Jawaban teks berhasil dikirim.'
         );
       }
-
     } finally {
       // Pastikan sesi tidak terkunci jika terjadi error.
       activeChats.delete(sessionId);
     }
-
   } catch (error) {
     console.error(
       '\n========== DETAIL ERROR FRIDAY =========='
     );
-    console.error(inspect(error, {
-      depth: 5,
-      colors: false,
-    }));
+    console.error(
+      inspect(error, {
+        depth: 5,
+        colors: false,
+      })
+    );
     console.error(error?.stack);
     console.error(
       '=========================================\n'
