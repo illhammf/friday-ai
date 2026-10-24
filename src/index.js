@@ -888,6 +888,27 @@ client.on('disconnected', (reason) => {
 
 
 client.on('message', async (message) => {
+  
+    if (message.fromMe) return;
+
+    // Kompatibilitas ID pesan WhatsApp Web
+    const messageId = message.id;
+
+    if (messageId && messageId._serialized == null) {
+      const serializedId =
+        messageId.$1 ??
+        (
+          messageId.fromMe != null &&
+          messageId.remote &&
+          messageId.id
+            ? `${messageId.fromMe}_${messageId.remote}_${messageId.id}`
+            : null
+        );
+
+      if (serializedId) {
+        messageId._serialized = serializedId;
+      }
+    }
   try {
     // Abaikan pesan dari akun FRIDAY sendiri.
     if (message.fromMe) return;
@@ -1028,16 +1049,12 @@ client.on('message', async (message) => {
         const media = await message.downloadMedia();
 
         if (!media) {
-          await message.reply(
-            'Maaf, gambarnya belum bisa diunduh. Coba kirim ulang ya.'
-          );
+          await message.reply('Maaf, gambar belum bisa dibaca. Coba kirim ulang ya.');
           return;
         }
 
         if (!media.mimetype?.startsWith('image/')) {
-          await message.reply(
-            'Maaf, format gambar ini belum didukung.'
-          );
+          await message.reply('File yang diterima bukan gambar yang didukung.');
           return;
         }
 
