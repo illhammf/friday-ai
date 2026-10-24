@@ -102,7 +102,7 @@ async function generateVoiceNote(text) {
       response_format: { type: 'audio' },
       generation_config: {
         speech_config: [
-          { voice: 'Schedar' },
+          { voice: 'Kore' },
         ],
       },
     });
