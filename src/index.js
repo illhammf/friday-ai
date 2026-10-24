@@ -1046,6 +1046,9 @@ client.on('message', async (message) => {
       let image = null;
 
       if (isImage) {
+        console.log('[DEBUG] ID pesan:', JSON.stringify(message.id));
+        console.log('[DEBUG] _serialized:', message.id?._serialized);
+        console.log('[DEBUG] $1:', message.id?.$1);
         const media = await message.downloadMedia();
 
         if (!media) {
