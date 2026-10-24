@@ -335,35 +335,7 @@ GAYA RESPONS: NATURAL
   return styles[style] || styles.natural;
 }
 
-// Untuk memproses pesan masuk, kita perlu memeriksa apakah pesan tersebut adalah catatan suara, gambar, atau teks biasa. Jika pesan adalah gambar, kita akan mengunduh media dan memeriksa formatnya. Jika formatnya tidak didukung, kita akan memberi tahu pengguna. Jika formatnya didukung, kita akan menyimpan data gambar untuk digunakan dalam pertanyaan ke FRIDAY.
-let image = null;
 
-if (isImage) {
-  const media = await message.downloadMedia();
-
-  if (!media) {
-    await message.reply(
-      'Maaf, gambarnya belum bisa diunduh. Coba kirim ulang ya.'
-    );
-    return;
-  }
-
-  if (!media.mimetype?.startsWith('image/')) {
-    await message.reply(
-      'Maaf, format gambar ini belum didukung.'
-    );
-    return;
-  }
-
-  image = {
-    mimetype: media.mimetype,
-    data: media.data,
-  };
-
-  if (!question) {
-    question = 'Jelaskan gambar ini secara rinci.';
-  }
-}
   // Fungsi utama untuk mengajukan pertanyaan ke FRIDAY dan mendapatkan jawaban.
   async function askFriday({
     question,
@@ -1042,6 +1014,36 @@ client.on('message', async (message) => {
         question = question
           ? `${question}\n\nIsi Voice Note: ${transcript}`
           : transcript;
+      }
+
+      // Unduh gambar jika ada.
+      let image = null;
+
+      if (isImage) {
+        const media = await message.downloadMedia();
+
+        if (!media) {
+          await message.reply(
+            'Maaf, gambarnya belum bisa diunduh. Coba kirim ulang ya.'
+          );
+          return;
+        }
+
+        if (!media.mimetype?.startsWith('image/')) {
+          await message.reply(
+            'Maaf, format gambar ini belum didukung.'
+          );
+          return;
+        }
+
+        image = {
+          mimetype: media.mimetype,
+          data: media.data,
+        };
+
+        if (!question) {
+          question = 'Jelaskan gambar ini secara rinci.';
+        }
       }
 
       console.log(
