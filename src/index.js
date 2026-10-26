@@ -481,34 +481,54 @@ client.on('message', async (message) => {
       // Pastikan sesi tidak terkunci jika terjadi error.
       activeChats.delete(sessionId);
     }
-  } catch (error) {
-    console.error(
-      '\n========== DETAIL ERROR FRIDAY =========='
-    );
-    console.error(
-      inspect(error, {
-        depth: 5,
-        colors: false,
-      })
-    );
-    console.error(error?.stack);
-    console.error(
-      '=========================================\n'
-    );
+      
+    } catch (error) {
+        const errorMessage = String(error?.message || error);
+        const errorStatus = Number(error?.status || error?.code);
 
-    try {
-      await message.reply(
-        'Maaf, aku sedang mengalami kendala. Coba kirim pesan lagi nanti.'
-      );
-    } catch (replyError) {
-      console.error(
-        'Gagal mengirim pesan cadangan:',
-        inspect(replyError, {
-          depth: 3,
-          colors: false,
-        })
-      );
-    }
+        const isUnavailable =
+          errorStatus === 503 ||
+          /\b503\b|UNAVAILABLE|high demand|overloaded/i.test(errorMessage);
+
+        const isRateLimit =
+          errorStatus === 429 ||
+          /\b429\b|rate.?limit|quota exceeded/i.test(errorMessage);
+
+        console.error(
+          '\n========== DETAIL ERROR FRIDAY =========='
+        );
+        console.error(
+          inspect(error, {
+            depth: 5,
+            colors: false,
+          })
+        );
+        console.error(
+          '=========================================\n'
+        );
+
+        let fallbackMessage;
+
+        if (isUnavailable) {
+          fallbackMessage =
+            'Maaf, layanan AI Friday sedang ramai. Coba kirim pesan lagi dalam beberapa saat ya.';
+        } else if (isRateLimit) {
+          fallbackMessage =
+            'Maaf, batas penggunaan AI sedang tercapai. Coba lagi beberapa saat nanti ya.';
+        } else {
+          fallbackMessage =
+            'Maaf, Friday sedang mengalami kendala. Coba kirim pesan lagi nanti ya.';
+        }
+
+        try {
+          await message.reply(fallbackMessage);
+          console.log('[Fallback] Pesan kendala berhasil dikirim.');
+        } catch (replyError) {
+          console.error(
+            '[Fallback gagal]',
+            replyError?.message || replyError
+          );
+        }
   }
 });
 
