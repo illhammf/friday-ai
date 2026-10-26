@@ -22,15 +22,6 @@ const BOT_NAME = process.env.BOT_NAME || 'Friday';
 const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 
 
-
-
-
-
-
-
-
-
-
   // Fungsi utama untuk mengajukan pertanyaan ke FRIDAY dan mendapatkan jawaban.
   async function askFriday({
     question,
@@ -80,17 +71,22 @@ const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
     const conversationStyle = detectConversationStyle(question);
     const dynamicStyle = getStyleInstruction(conversationStyle);
 
-    
-const response = await ai.models.generateContent({
-  model: MODEL,
-  contents,
-  config: {
-    systemInstruction: [
-      systemInstruction,
-      dynamicStyle,
-    ].filter(Boolean).join('\n\n'),
-  },
-});
+    const aiStart = Date.now();
+
+    const response = await ai.models.generateContent({
+      model: MODEL,
+      contents,
+      config: {
+        systemInstruction: [
+          systemInstruction,
+          dynamicStyle,
+        ].filter(Boolean).join('\n\n'),
+      },
+    });
+
+    console.log(
+      `[Waktu Gemini] ${((Date.now() - aiStart) / 1000).toFixed(2)} detik`,
+    );
 
     const answer = response.text?.trim();
 
