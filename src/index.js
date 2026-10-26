@@ -472,13 +472,13 @@ process.on('SIGINT', () => {
   client.destroy()
     .catch(() => {})
     .finally(() => {
-      db.close();
+      closeDatabase();
       process.exit(0);
     });
 });
 
 client.initialize().catch((error) => {
   console.error('Gagal menjalankan WhatsApp:', error.message);
-  db.close();
+  closeDatabase();
   process.exitCode = 1;
 });
