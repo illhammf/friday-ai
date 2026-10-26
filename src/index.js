@@ -42,9 +42,7 @@ async function generateWithRetry(model, contents, config) {
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      console.log(
-        `[Gemini] Model ${model}, percobaan ${attempt}/${maxAttempts}`
-      );
+      logEvent('ai', `Model ${model}`, `Percobaan ${attempt}/${maxAttempts}`);
 
       return await ai.models.generateContent({
         model,
@@ -58,8 +56,10 @@ async function generateWithRetry(model, contents, config) {
 
       const delayMs = 1500 * attempt;
 
-      console.warn(
-        `[Gemini] Gangguan sementara. Mencoba lagi dalam ${delayMs / 1000} detik.`
+      logEvent(
+        'warn',
+        'Layanan AI sedang sibuk',
+        `Mencoba ulang dalam ${delayMs / 1000} detik`
       );
 
       await sleep(delayMs);
@@ -242,10 +242,25 @@ function logDivider() {
       );
     }
 
-    console.log('[Penggunaan token]', response.usageMetadata);
-    
-    console.log(
-      `[Waktu Gemini] ${((Date.now() - aiStart) / 1000).toFixed(2)} detik`,
+    // Catat waktu respons dan penggunaan token.
+    const elapsedSeconds = (
+      (Date.now() - aiStart) / 1000
+    ).toFixed(2);
+
+    const usage = response.usageMetadata || {};
+
+    logEvent(
+      'success',
+      'Respons Gemini diterima',
+      `${elapsedSeconds}s`
+    );
+
+    logEvent(
+      'ai',
+      'Penggunaan token',
+      `Input: ${usage.promptTokenCount ?? '?'} | ` +
+      `Output: ${usage.candidatesTokenCount ?? '?'} | ` +
+      `Total: ${usage.totalTokenCount ?? '?'}`
     );
 
     const answer = response.text?.trim();
@@ -500,8 +515,12 @@ client.on('message', async (message) => {
         }
       }
 
-      console.log(
-        `[Pesan baru] ${isGroup ? 'Grup' : 'Pribadi'} | ${sessionId}`
+      logDivider();
+
+      logEvent(
+        'info',
+        `Pesan masuk · ${isGroup ? 'Grup' : 'Pribadi'}`,
+        `Sesi: ${sessionId}`
       );
 
       // Kirim pertanyaan beserta gambar ke model AI.
@@ -548,9 +567,8 @@ client.on('message', async (message) => {
 
             audioSent = true;
 
-            console.log(
-              '[Pesan terkirim] Voice Note berhasil dikirim.'
-            );
+            logEvent('voice', 'Voice Note berhasil dikirim', 'WhatsApp');
+
           } catch (error) {
             const errorMessage = String(
               error?.message || error
@@ -618,9 +636,7 @@ client.on('message', async (message) => {
           // Permintaan biasa tetap mendapatkan jawaban teks.
           await message.reply(answer);
 
-          console.log(
-            '[Pesan terkirim] Jawaban teks berhasil dikirim.'
-          );
+          logEvent('success', 'Jawaban teks berhasil dikirim', 'WhatsApp');
         }
     } finally {
       // Pastikan sesi tidak terkunci jika terjadi error.
