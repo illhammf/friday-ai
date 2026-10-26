@@ -18,8 +18,50 @@ import { inspect } from 'node:util';
 
 const { Client, LocalAuth, MessageMedia } = whatsapp;
 
+
 const BOT_NAME = process.env.BOT_NAME || 'Friday';
 const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+
+// Warna terminal ANSI, tanpa dependensi tambahan.
+const terminal = {
+  reset: '\x1b[0m',
+  cyan: '\x1b[36m',
+  brightCyan: '\x1b[96m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  red: '\x1b[31m',
+  gray: '\x1b[90m',
+  bold: '\x1b[1m',
+};
+
+function printBanner() {
+  const c = terminal;
+
+  console.clear();
+
+  console.log(`${c.brightCyan}${c.bold}
+  ███████╗ ██████╗ ██╗██████╗  █████╗ ██╗   ██╗
+  ██╔════╝██╔═══██╗██║██╔══██╗██╔══██╗╚██╗ ██╔╝
+  █████╗  ██║   ██║██║██║  ██║███████║ ╚████╔╝
+  ██╔══╝  ██║   ██║██║██║  ██║██╔══██║  ╚██╔╝
+  ██║     ╚██████╔╝██║██║  ██║██║  ██║   ██║
+  ╚═╝      ╚═════╝ ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝
+${c.reset}`);
+
+  console.log(`${c.cyan}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${c.reset}`);
+  console.log(`${c.bold}             PERSONAL AI ASSISTANT${c.reset}`);
+  console.log(`${c.gray}                 SYSTEM INITIALIZATION${c.reset}`);
+  console.log(`${c.cyan}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${c.reset}\n`);
+
+  console.log(`  ${c.green}●${c.reset} ${c.bold}FRIDAY${c.reset}       Personal AI Assistant`);
+  console.log(`  ${c.green}●${c.reset} ${c.bold}AI ENGINE${c.reset}    ${MODEL}`);
+  console.log(`  ${c.yellow}●${c.reset} ${c.bold}WHATSAPP${c.reset}     Menunggu koneksi...`);
+  console.log(`  ${c.green}●${c.reset} ${c.bold}PRIVATE CHAT${c.reset} Aktif`);
+  console.log(`  ${c.green}●${c.reset} ${c.bold}GROUP MODE${c.reset}   Trigger: Friday`);
+
+  console.log(`\n${c.cyan}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${c.reset}`);
+  console.log(`${c.brightCyan}  Initializing systems. Please wait...${c.reset}\n`);
+}
 
 
   // Fungsi utama untuk mengajukan pertanyaan ke FRIDAY dan mendapatkan jawaban.
