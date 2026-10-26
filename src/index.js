@@ -2,7 +2,13 @@
 import 'dotenv/config';
 import { generateVoiceNote } from './audio/generate-voice-note.js';
 import { transcribeVoiceNote } from './audio/transcribe-voice-note.js';
-import { saveMessage, loadHistory, privateSessionId, groupSessionId } from './database/history.js';
+import {
+  saveMessage,
+  loadHistory,
+  privateSessionId,
+  groupSessionId,
+  closeDatabase,
+} from './database/history.js';
 import { detectConversationStyle, getStyleInstruction } from './ai/conversation-style.js';
 import { systemInstruction } from './config/system-instruction.js';
 import { ai } from './ai/gemini.js';

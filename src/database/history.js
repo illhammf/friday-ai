@@ -4,4 +4,5 @@ export {
   loadHistory,
   privateSessionId,
   groupSessionId,
+  closeDatabase,
 } from './sqlite.js';

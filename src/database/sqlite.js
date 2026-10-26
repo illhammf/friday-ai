@@ -65,3 +65,7 @@ export function loadHistory(sessionId, limit = 10) {
       parts: [{ text: content }],
     }));
 }
+
+export function closeDatabase() {
+  db.close();
+}
