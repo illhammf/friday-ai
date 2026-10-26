@@ -117,6 +117,47 @@ ${c.reset}`);
   console.log(`${c.brightCyan}  Initializing systems. Please wait...${c.reset}\n`);
 }
 
+// Fungsi log dengan warna dan label.
+const logStyle = {
+  reset: '\x1b[0m',
+  bold: '\x1b[1m',
+  cyan: '\x1b[36m',
+  blue: '\x1b[34m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  red: '\x1b[31m',
+  gray: '\x1b[90m',
+  purple: '\x1b[35m',
+};
+
+function logEvent(type, title, detail = '') {
+  const styles = {
+    info: ['INFO', logStyle.cyan],
+    ai: ['GEMINI', logStyle.purple],
+    success: ['SUCCESS', logStyle.green],
+    warn: ['RETRY', logStyle.yellow],
+    error: ['ERROR', logStyle.red],
+    voice: ['VOICE', logStyle.blue],
+  };
+
+  const [label, color] = styles[type] || styles.info;
+  const timestamp = new Date().toLocaleTimeString('id-ID', {
+    hour12: false,
+  });
+
+  console.log(
+    `${logStyle.gray}${timestamp}${logStyle.reset} ` +
+    `${color}${logStyle.bold}[${label}]${logStyle.reset} ` +
+    `${title}` +
+    (detail ? ` ${logStyle.gray}│ ${detail}${logStyle.reset}` : '')
+  );
+}
+
+function logDivider() {
+  console.log(
+    `${logStyle.gray}────────────────────────────────────────────${logStyle.reset}`
+  );
+}
 
   // Fungsi utama untuk mengajukan pertanyaan ke FRIDAY dan mendapatkan jawaban.
   async function askFriday({
