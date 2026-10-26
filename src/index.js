@@ -22,6 +22,53 @@ const { Client, LocalAuth, MessageMedia } = whatsapp;
 const BOT_NAME = process.env.BOT_NAME || 'Friday';
 const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 
+const FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || '';
+
+const sleep = (ms) =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+function isTemporaryGeminiError(error) {
+  const status = Number(error?.status || error?.code);
+  const message = String(error?.message || error);
+
+  return (
+    [429, 500, 502, 503, 504].includes(status) ||
+    /\b429\b|\b503\b|UNAVAILABLE|high demand|rate.?limit|quota exceeded|overloaded|temporarily unavailable/i.test(message)
+  );
+}
+
+async function generateWithRetry(model, contents, config) {
+  const maxAttempts = 2;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      console.log(
+        `[Gemini] Model ${model}, percobaan ${attempt}/${maxAttempts}`
+      );
+
+      return await ai.models.generateContent({
+        model,
+        contents,
+        config,
+      });
+    } catch (error) {
+      if (!isTemporaryGeminiError(error) || attempt === maxAttempts) {
+        throw error;
+      }
+
+      const delayMs = 1500 * attempt;
+
+      console.warn(
+        `[Gemini] Gangguan sementara. Mencoba lagi dalam ${delayMs / 1000} detik.`
+      );
+
+      await sleep(delayMs);
+    }
+  }
+
+  throw new Error('Semua percobaan Gemini gagal.');
+}
+
 // Warna terminal ANSI, tanpa dependensi tambahan.
 const terminal = {
   reset: '\x1b[0m',
