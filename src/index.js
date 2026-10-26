@@ -84,6 +84,8 @@ const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
       },
     });
 
+    console.log('[Penggunaan token]', response.usageMetadata);
+    
     console.log(
       `[Waktu Gemini] ${((Date.now() - aiStart) / 1000).toFixed(2)} detik`,
     );
