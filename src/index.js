@@ -172,16 +172,22 @@ client.on('authenticated', () => {
 });
 
 
+
 client.on('ready', () => {
-  // Simpan waktu aktif dalam satuan detik, sesuai timestamp WhatsApp.
   fridayReadyAt = Math.floor(Date.now() / 1000);
 
-  console.log(`\n${BOT_NAME} terhubung ke WhatsApp.`);
-  console.log(`Model AI: ${MODEL}`);
-  console.log('Chat pribadi: aktif.');
-  console.log('Grup: panggil dengan awalan "Friday".');
-  console.log(`Waktu siap: ${fridayReadyAt}`);
-  console.log('Pesan sebelum waktu siap akan diabaikan.\n');
+  const c = terminal;
+
+  console.log(`\n${c.cyan}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${c.reset}`);
+  console.log(`  ${c.green}●${c.reset} ${c.bold}CONNECTION ESTABLISHED${c.reset}`);
+  console.log(`  ${c.green}●${c.reset} WhatsApp       ${c.green}CONNECTED${c.reset}`);
+  console.log(`  ${c.green}●${c.reset} AI Engine      ${MODEL}`);
+  console.log(`  ${c.green}●${c.reset} Private Chat   ACTIVE`);
+  console.log(`  ${c.green}●${c.reset} Group Mode     ACTIVE`);
+  console.log(`  ${c.gray}  Ready timestamp: ${fridayReadyAt}${c.reset}`);
+  console.log(`  ${c.cyan}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${c.reset}`);
+  console.log(`\n  ${c.brightCyan}${c.bold}${BOT_NAME} is online.${c.reset}`);
+  console.log(`  ${c.gray}Menunggu pesan masuk...${c.reset}\n`);
 });
 
 
@@ -516,6 +522,8 @@ process.on('SIGINT', () => {
       process.exit(0);
     });
 });
+
+printBanner();
 
 client.initialize().catch((error) => {
   console.error('Gagal menjalankan WhatsApp:', error.message);
