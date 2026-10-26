@@ -473,85 +473,114 @@ client.on('message', async (message) => {
       });
 
       // Deteksi permintaan balasan suara.
-      const asksForVoice =
-        /\b(?:voice[\s-]?note|vn|pesan suara|voice reply|voice message)\b/i.test(question) ||
-        /\b(?:balas|jawab|bales)(?:lah)?\s+(?:dengan|pakai|menggunakan)\s+(?:suara|voice\s*note|vn)\b/i.test(question) ||
-        /\b(?:gunakan|pake|pakai|menggunakan)\s+(?:vn|voice\s*note|pesan suara)\b/i.test(question) ||
-        /\b(?:kirim|buat|bikin)\s+(?:aku\s+)?(?:vn|voice\s*note|pesan suara)\b/i.test(question);
 
-      // VN masuk selalu dibalas dengan VN jika memungkinkan.
-      if (isVoiceNote || asksForVoice) {
-        let audioResult = null;
+      // Deteksi apakah pengguna meminta jawaban berupa Voice Note.
+       const asksForVoice =
+          /\b(?:vn|voice[\s-]?note|voice message|pesan suara)\b/i.test(question) ||
+          /\b(?:balas|jawab|bales)(?:lah)?\b.{0,100}\b(?:pakai|pake|dengan|menggunakan|lewat|melalui)\s+(?:vn|suara|voice[\s-]?note|audio)\b/i.test(question) ||
+          /\b(?:kirim|buat|bikin|ubah|jadikan)\b.{0,60}\b(?:vn|voice[\s-]?note|pesan suara)\b/i.test(question) ||
+          /\b(?:ngomong|berbicara|ucapkan|bacakan)\b/i.test(question);
 
-        try {
-          audioResult = await generateVoiceNote(answer);
+        // Voice Note masuk atau permintaan VN akan diarahkan ke pengiriman audio.
+        if (isVoiceNote || asksForVoice) {
+          let audioResult = null;
+          let audioSent = false;
 
-          const audioMedia = MessageMedia.fromFilePath(
-            audioResult.path
-          );
+          try {
+            console.log('[VN] Menyiapkan jawaban audio...');
 
-          await client.sendMessage(message.from, audioMedia, {
-            sendAudioAsVoice: true,
-          });
+            audioResult = await generateVoiceNote(answer);
 
-          console.log(
-            '[Pesan terkirim] Voice Note berhasil dikirim.'
-          );
-        } catch (error) {
-          const errorMessage = String(
-            error?.message || error
-          );
+            if (!audioResult?.path) {
+              throw new Error(
+                'Proses pembuat audio tidak menghasilkan file audio.'
+              );
+            }
 
-          const isRateLimit =
-            error?.status === 429 ||
-            /\b429\b|rate.?limit|quota exceeded/i.test(
+            const audioMedia = MessageMedia.fromFilePath(
+              audioResult.path
+            );
+
+            await client.sendMessage(message.from, audioMedia, {
+              sendAudioAsVoice: true,
+            });
+
+            audioSent = true;
+
+            console.log(
+              '[Pesan terkirim] Voice Note berhasil dikirim.'
+            );
+          } catch (error) {
+            const errorMessage = String(
+              error?.message || error
+            );
+
+            const errorStatus = Number(
+              error?.status || error?.code
+            );
+
+            const isRateLimit =
+              errorStatus === 429 ||
+              /\b429\b|rate.?limit|quota exceeded/i.test(
+                errorMessage
+              );
+
+            console.error(
+              '[TTS/pengiriman audio gagal]',
               errorMessage
             );
 
-          console.error(
-            '[TTS/pengiriman audio gagal]',
-            errorMessage
-          );
+            let explanation;
 
-          if (isRateLimit) {
-            console.warn(
-              '[TTS] Batas penggunaan tercapai. Beralih ke teks.'
-            );
-          }
+            if (isRateLimit) {
+              explanation =
+                'layanan pembuat suara sedang mencapai batas penggunaan.';
+            } else {
+              explanation =
+                'proses pembuatan atau pengiriman audio sedang mengalami kendala.';
+            }
 
-          try {
-            await message.reply(
-              `Maaf, Voice Note belum bisa dikirim saat ini. Ini jawaban teksnya:\n\n${answer}`
-            );
+            // Beri tahu pengguna secara natural dan tetap sediakan jawaban teks.
+            const fallbackText =
+              `Maaf, kali ini aku belum berhasil mengirim Voice Note karena ${explanation}\n\n` +
+              `Jawabanku dalam bentuk teks:\n\n${answer}`;
 
-            console.log(
-              '[Fallback] Jawaban teks berhasil dikirim.'
-            );
-          } catch (replyError) {
-            console.error(
-              '[Fallback teks gagal]',
-              replyError?.message || replyError
-            );
-          }
-        } finally {
-          if (audioResult?.cleanup) {
             try {
-              await audioResult.cleanup();
-            } catch (cleanupError) {
+              await message.reply(fallbackText);
+
+              console.log(
+                '[Fallback] Penjelasan dan jawaban teks berhasil dikirim.'
+              );
+            } catch (replyError) {
               console.error(
-                '[Cleanup audio gagal]',
-                cleanupError?.message || cleanupError
+                '[Fallback teks gagal]',
+                replyError?.message || replyError
               );
             }
+          } finally {
+            if (audioResult?.cleanup) {
+              try {
+                await audioResult.cleanup();
+              } catch (cleanupError) {
+                console.error(
+                  '[Cleanup audio gagal]',
+                  cleanupError?.message || cleanupError
+                );
+              }
+            }
           }
-        }
-      } else {
-        await message.reply(answer);
 
-        console.log(
-          '[Pesan terkirim] Jawaban teks berhasil dikirim.'
-        );
-      }
+          if (audioSent) {
+            console.log('[VN] Proses pengiriman selesai.');
+          }
+        } else {
+          // Permintaan biasa tetap mendapatkan jawaban teks.
+          await message.reply(answer);
+
+          console.log(
+            '[Pesan terkirim] Jawaban teks berhasil dikirim.'
+          );
+        }
     } finally {
       // Pastikan sesi tidak terkunci jika terjadi error.
       activeChats.delete(sessionId);
