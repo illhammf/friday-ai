@@ -162,16 +162,37 @@ ${c.reset}`);
 
     const aiStart = Date.now();
 
-    const response = await ai.models.generateContent({
-      model: MODEL,
-      contents,
-      config: {
-        systemInstruction: [
-          systemInstruction,
-          dynamicStyle,
-        ].filter(Boolean).join('\n\n'),
-      },
-    });
+
+    const config = {
+      systemInstruction: [
+        systemInstruction,
+        dynamicStyle,
+      ].filter(Boolean).join('\n\n'),
+    };
+
+    let response;
+
+    try {
+      response = await generateWithRetry(MODEL, contents, config);
+    } catch (primaryError) {
+      if (
+        !FALLBACK_MODEL ||
+        FALLBACK_MODEL === MODEL ||
+        !isTemporaryGeminiError(primaryError)
+      ) {
+        throw primaryError;
+      }
+
+      console.warn(
+        `[Gemini] Model utama gagal sementara. Beralih ke ${FALLBACK_MODEL}.`
+      );
+
+      response = await generateWithRetry(
+        FALLBACK_MODEL,
+        contents,
+        config
+      );
+    }
 
     console.log('[Penggunaan token]', response.usageMetadata);
     
