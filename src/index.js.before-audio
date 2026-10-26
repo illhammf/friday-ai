@@ -1,0 +1,601 @@
+
+import 'dotenv/config';
+import { saveMessage, loadHistory, privateSessionId, groupSessionId } from './database/history.js';
+import { detectConversationStyle, getStyleInstruction } from './ai/conversation-style.js';
+import { systemInstruction } from './config/system-instruction.js';
+import { GoogleGenAI } from '@google/genai';
+import whatsapp from 'whatsapp-web.js';
+import qrcode from 'qrcode-terminal';
+import { inspect } from 'node:util';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+
+const { Client, LocalAuth, MessageMedia } = whatsapp;
+
+const BOT_NAME = process.env.BOT_NAME || 'Friday';
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+const API_KEY = process.env.GEMINI_API_KEY;
+
+if (!API_KEY) {
+  console.error('API key belum dikonfigurasi. Periksa file .env.');
+  process.exit(1);
+}
+
+const ai = new GoogleGenAI({ apiKey: API_KEY });
+
+async function transcribeVoiceNote(media) { // Untuk transkripsi catatan suara, media adalah objek yang berisi data audio.
+  if (!media?.data || !media.mimetype?.startsWith('audio/')) {
+    throw new Error('Lampiran bukan audio yang didukung.');
+  }
+
+  const temporaryDirectory = await mkdtemp(
+    join(tmpdir(), 'friday-audio-'),
+  );
+
+  const audioPath = join(temporaryDirectory, 'voice-note.ogg');
+
+  try {
+    const audioBuffer = Buffer.from(media.data, 'base64');
+    await writeFile(audioPath, audioBuffer);
+
+    const uploadedAudio = await ai.files.upload({
+      file: audioPath,
+      config: {
+        mime_type: media.mimetype,
+      },
+    });
+
+    const transcription = await ai.interactions.create({
+      model: 'gemini-3.5-transcribe',
+      input: [
+        {
+          type: 'audio',
+          uri: uploadedAudio.uri,
+          mime_type: uploadedAudio.mimeType,
+        },
+      ],
+    });
+
+    const transcript = transcription.output_text?.trim();
+
+    if (!transcript) {
+      throw new Error('Transkripsi audio tidak menghasilkan teks.');
+    }
+
+    return transcript;
+  } finally {
+    await rm(temporaryDirectory, {
+      recursive: true,
+      force: true,
+    });
+  }
+}
+
+async function generateVoiceNote(text) {
+  const temporaryDirectory = await mkdtemp(
+    join(tmpdir(), 'friday-tts-'),
+  );
+
+  const wavPath = join(temporaryDirectory, 'answer.wav');
+  const oggPath = join(temporaryDirectory, 'answer.ogg');
+
+  try {
+    const interaction = await ai.interactions.create({
+      model: 'gemini-3.8-flash-tts',
+      input: [
+        {
+          type: 'user_input',
+          content: [
+            {
+              type: 'text',
+              text: text.slice(0, 4000),
+              annotations: [
+                {
+                  type: 'speech_metadata',
+                  style: 'A calm, intelligent, feminine-sounding futuristic AI assistant. Speak Indonesian naturally, with clear articulation, measured pacing, subtle warmth, and confident but gentle intonation. Sound composed, polished, and professional. Avoid exaggerated emotion and an overly cheerful tone.',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      response_format: { type: 'audio' },
+      generation_config: {
+        speech_config: [
+          { voice: 'Despina' }, // Bisa juga Laomedeia, Kore, Achernar, Erinome, Despina atau lainnya sesuai dokumentasi Gemini TTS.
+        ],
+      },
+    });
+
+    if (!interaction.output_audio?.data) {
+      throw new Error('Gemini tidak menghasilkan data audio.');
+    }
+
+    await writeFile(
+      wavPath,
+      Buffer.from(interaction.output_audio.data, 'base64'),
+    );
+
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const execFileAsync = promisify(execFile);
+
+    await execFileAsync('ffmpeg', [
+      '-y',
+      '-i', wavPath,
+      '-vn',
+      '-c:a', 'libopus',
+      '-b:a', '32k',
+      '-vbr', 'on',
+      '-application', 'voip',
+      '-ac', '1',
+      '-ar', '48000',
+      oggPath,
+    ]);
+
+    return {
+      path: oggPath,
+      cleanup: () => rm(temporaryDirectory, {
+        recursive: true,
+        force: true,
+      }),
+    };
+  } catch (error) {
+    await rm(temporaryDirectory, {
+      recursive: true,
+      force: true,
+    });
+    throw error;
+  }
+}
+
+
+
+
+
+
+  // Fungsi utama untuk mengajukan pertanyaan ke FRIDAY dan mendapatkan jawaban.
+  async function askFriday({
+    question,
+    privateSession,
+    sharedGroupSession = null,
+    senderName = 'Pengguna',
+    image,
+  }) {
+    // Tentukan jenis percakapan.
+    const isGroup = Boolean(sharedGroupSession);
+
+    // Ambil riwayat hanya dari sesi yang sedang digunakan.
+    // Grup tidak boleh membaca riwayat percakapan pribadi.
+    const activeSession = isGroup
+      ? sharedGroupSession
+      : privateSession;
+
+    const history = loadHistory(activeSession, 10);
+
+    // Identitas pengirim hanya ditambahkan pada pesan grup.
+    const userMessage = isGroup
+      ? `${senderName}: ${question}`
+      : question;
+
+    // Tambahkan pertanyaan pengguna dan lampiran gambar (jika ada) ke dalam konten percakapan.
+    const userParts = [
+      { text: userMessage || 'Tolong jelaskan gambar ini.' },
+    ];
+    // Jika ada lampiran gambar, tambahkan ke konten percakapan.
+    if (image) {
+      userParts.push({
+        inlineData: {
+          mimeType: image.mimetype,
+          data: image.data,
+        },
+      });
+    }
+
+    const contents = [
+      ...history,
+      {
+        role: 'user',
+        parts: userParts,
+      },
+    ];
+
+    const conversationStyle = detectConversationStyle(question);
+    const dynamicStyle = getStyleInstruction(conversationStyle);
+
+    const response = await ai.models.generateContent({
+      config: {
+        systemInstruction: [systemInstruction, dynamicStyle].filter(Boolean).join('\n\n'),
+      },
+    });
+
+    const answer = response.text?.trim();
+
+    if (!answer) {
+      throw new Error('AI tidak menghasilkan jawaban.');
+    }
+
+    // Simpan hanya ke sesi yang benar-benar digunakan.
+    saveMessage(activeSession, 'user', userMessage);
+    saveMessage(activeSession, 'model', answer);
+
+    return answer;
+  }
+
+
+const client = new Client({
+  authStrategy: new LocalAuth({
+    clientId: 'friday',
+    dataPath: './.wwebjs_auth',
+  }),
+  puppeteer: {
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+  },
+});
+
+// Untuk mencegah permintaan bersamaan dari chat yang sama, kita menggunakan Set untuk melacak chat aktif.
+const activeChats = new Set();
+let fridayReadyAt = 0;
+
+client.on('qr', (qr) => {
+  console.log('\nPindai QR ini menggunakan WhatsApp FRIDAY:');
+  qrcode.generate(qr, { small: true });
+  console.log('\nBuka WhatsApp > Perangkat tertaut > Tautkan perangkat.');
+});
+
+client.on('authenticated', () => {
+  console.log('Autentikasi WhatsApp berhasil.');
+});
+
+
+client.on('ready', () => {
+  // Simpan waktu aktif dalam satuan detik, sesuai timestamp WhatsApp.
+  fridayReadyAt = Math.floor(Date.now() / 1000);
+
+  console.log(`\n${BOT_NAME} terhubung ke WhatsApp.`);
+  console.log(`Model AI: ${MODEL}`);
+  console.log('Chat pribadi: aktif.');
+  console.log('Grup: panggil dengan awalan "Friday".');
+  console.log(`Waktu siap: ${fridayReadyAt}`);
+  console.log('Pesan sebelum waktu siap akan diabaikan.\n');
+});
+
+
+client.on('auth_failure', (message) => {
+  console.error('Autentikasi gagal:', message);
+});
+
+client.on('disconnected', (reason) => {
+  console.warn('WhatsApp terputus:', reason);
+});
+
+
+client.on('message', async (message) => {
+  
+    if (message.fromMe) return;
+
+    // Kompatibilitas ID pesan WhatsApp Web
+    const messageId = message.id;
+
+    if (messageId && messageId._serialized == null) {
+      const serializedId =
+        messageId.$1 ??
+        (
+          messageId.fromMe != null &&
+          messageId.remote &&
+          messageId.id
+            ? `${messageId.fromMe}_${messageId.remote}_${messageId.id}`
+            : null
+        );
+
+      if (serializedId) {
+        messageId._serialized = serializedId;
+      }
+    }
+  try {
+    // Abaikan pesan dari akun FRIDAY sendiri.
+    if (message.fromMe) return;
+
+    // Identifikasi jenis pesan.
+    const isVoiceNote = message.type === 'ptt';
+    const isImage = message.type === 'image';
+    const hasText = Boolean(message.body?.trim());
+
+    // Abaikan pesan yang tidak didukung.
+    if (!isVoiceNote && !isImage && !hasText) return;
+
+    // Definisikan pertanyaan sebelum digunakan.
+    let question = message.body?.trim() || '';
+
+    // Abaikan pesan sebelum FRIDAY siap.
+    const messageTime = Number(message.timestamp);
+
+    if (
+      !fridayReadyAt ||
+      !Number.isFinite(messageTime) ||
+      messageTime <= 0
+    ) {
+      console.log('[Diabaikan] Timestamp tidak valid:', {
+        messageTime,
+        fridayReadyAt,
+      });
+      return;
+    }
+
+    if (messageTime < fridayReadyAt) {
+      console.log(
+        '[Diabaikan] Pesan dikirim sebelum FRIDAY siap.'
+      );
+      return;
+    }
+
+    // Identifikasi chat pribadi atau grup.
+    const isGroup = message.from.endsWith('@g.us');
+
+    // Di grup, pesan harus diawali nama FRIDAY.
+    if (isGroup) {
+      const escapedName = BOT_NAME.replace(
+        /[.*+?^${}()|[\]\\]/g,
+        '\\$&'
+      );
+
+      const prefix = new RegExp(
+        `^${escapedName}\\b[\\s,:-]*`,
+        'i'
+      );
+
+      if (!prefix.test(question)) {
+        console.log(
+          '[Diabaikan] FRIDAY tidak dipanggil di grup.'
+        );
+        return;
+      }
+
+      question = question.replace(prefix, '').trim();
+
+      // Sapaan teks tanpa pertanyaan.
+      if (!question && !isVoiceNote && !isImage) {
+        await message.reply(
+          `Halo! Aku ${BOT_NAME}. Ada yang bisa kubantu?`
+        );
+        return;
+      }
+    } else if (!question && !isVoiceNote && !isImage) {
+      // Sapaan kosong di chat pribadi.
+      await message.reply(
+        `Halo! Aku ${BOT_NAME}. Ada yang bisa kubantu?`
+      );
+      return;
+    }
+
+    // Identitas dan sesi percakapan.
+    const senderId = isGroup
+      ? (message.author || message.from)
+      : message.from;
+
+    const privateSession = privateSessionId(senderId);
+
+    const sharedGroupSession = isGroup
+      ? groupSessionId(message.from)
+      : null;
+
+    const senderName = isGroup
+      ? (message._data?.notifyName || 'Anggota grup')
+      : 'Pengguna';
+
+    // Cegah permintaan bersamaan dari sesi pengguna yang sama.
+    const sessionId = privateSession;
+
+    if (activeChats.has(sessionId)) {
+      await message.reply(
+        'Sebentar ya, aku masih memproses pesan sebelumnya.'
+      );
+      return;
+    }
+
+    activeChats.add(sessionId);
+
+    try {
+      // Unduh dan transkripsikan Voice Note masuk.
+      if (isVoiceNote) {
+        const media = await message.downloadMedia();
+
+        if (!media) {
+          await message.reply(
+            'Maaf, Voice Note tidak bisa diunduh. Coba kirim ulang ya.'
+          );
+          return;
+        }
+
+        const transcript = (
+          await transcribeVoiceNote(media)
+        )?.trim();
+
+        if (!transcript) {
+          await message.reply(
+            'Maaf, isi Voice Note belum bisa kupahami. Coba kirim ulang atau tuliskan pesannya ya.'
+          );
+          return;
+        }
+
+        console.log('[Transkripsi Voice Note]', transcript);
+
+        question = question
+          ? `${question}\n\nIsi Voice Note: ${transcript}`
+          : transcript;
+      }
+
+      // Unduh gambar untuk analisis Vision AI.
+      let image = null;
+
+      if (isImage) {
+        console.log('[DEBUG] ID pesan:', JSON.stringify(message.id));
+        console.log('[DEBUG] _serialized:', message.id?._serialized);
+        console.log('[DEBUG] $1:', message.id?.$1);
+        const media = await message.downloadMedia();
+
+        if (!media) {
+          await message.reply('Maaf, gambar belum bisa dibaca. Coba kirim ulang ya.');
+          return;
+        }
+
+        if (!media.mimetype?.startsWith('image/')) {
+          await message.reply('File yang diterima bukan gambar yang didukung.');
+          return;
+        }
+
+        image = {
+          mimetype: media.mimetype,
+          data: media.data,
+        };
+
+        if (!question) {
+          question = 'Jelaskan gambar ini secara rinci.';
+        }
+      }
+
+      console.log(
+        `[Pesan baru] ${isGroup ? 'Grup' : 'Pribadi'} | ${sessionId}`
+      );
+
+      // Kirim pertanyaan beserta gambar ke model AI.
+      const answer = await askFriday({
+        question,
+        privateSession,
+        sharedGroupSession,
+        senderName,
+        image,
+      });
+
+      // Deteksi permintaan balasan suara.
+      const asksForVoice =
+        /\b(?:voice[\s-]?note|vn|pesan suara|voice reply|voice message)\b/i.test(question) ||
+        /\b(?:balas|jawab|bales)(?:lah)?\s+(?:dengan|pakai|menggunakan)\s+(?:suara|voice\s*note|vn)\b/i.test(question) ||
+        /\b(?:gunakan|pake|pakai|menggunakan)\s+(?:vn|voice\s*note|pesan suara)\b/i.test(question) ||
+        /\b(?:kirim|buat|bikin)\s+(?:aku\s+)?(?:vn|voice\s*note|pesan suara)\b/i.test(question);
+
+      // VN masuk selalu dibalas dengan VN jika memungkinkan.
+      if (isVoiceNote || asksForVoice) {
+        let audioResult = null;
+
+        try {
+          audioResult = await generateVoiceNote(answer);
+
+          const audioMedia = MessageMedia.fromFilePath(
+            audioResult.path
+          );
+
+          await client.sendMessage(message.from, audioMedia, {
+            sendAudioAsVoice: true,
+          });
+
+          console.log(
+            '[Pesan terkirim] Voice Note berhasil dikirim.'
+          );
+        } catch (error) {
+          const errorMessage = String(
+            error?.message || error
+          );
+
+          const isRateLimit =
+            error?.status === 429 ||
+            /\b429\b|rate.?limit|quota exceeded/i.test(
+              errorMessage
+            );
+
+          console.error(
+            '[TTS/pengiriman audio gagal]',
+            errorMessage
+          );
+
+          if (isRateLimit) {
+            console.warn(
+              '[TTS] Batas penggunaan tercapai. Beralih ke teks.'
+            );
+          }
+
+          try {
+            await message.reply(
+              `Maaf, Voice Note belum bisa dikirim saat ini. Ini jawaban teksnya:\n\n${answer}`
+            );
+
+            console.log(
+              '[Fallback] Jawaban teks berhasil dikirim.'
+            );
+          } catch (replyError) {
+            console.error(
+              '[Fallback teks gagal]',
+              replyError?.message || replyError
+            );
+          }
+        } finally {
+          if (audioResult?.cleanup) {
+            try {
+              await audioResult.cleanup();
+            } catch (cleanupError) {
+              console.error(
+                '[Cleanup audio gagal]',
+                cleanupError?.message || cleanupError
+              );
+            }
+          }
+        }
+      } else {
+        await message.reply(answer);
+
+        console.log(
+          '[Pesan terkirim] Jawaban teks berhasil dikirim.'
+        );
+      }
+    } finally {
+      // Pastikan sesi tidak terkunci jika terjadi error.
+      activeChats.delete(sessionId);
+    }
+  } catch (error) {
+    console.error(
+      '\n========== DETAIL ERROR FRIDAY =========='
+    );
+    console.error(
+      inspect(error, {
+        depth: 5,
+        colors: false,
+      })
+    );
+    console.error(error?.stack);
+    console.error(
+      '=========================================\n'
+    );
+
+    try {
+      await message.reply(
+        'Maaf, aku sedang mengalami kendala. Coba kirim pesan lagi nanti.'
+      );
+    } catch (replyError) {
+      console.error(
+        'Gagal mengirim pesan cadangan:',
+        inspect(replyError, {
+          depth: 3,
+          colors: false,
+        })
+      );
+    }
+  }
+});
+
+process.on('SIGINT', () => {
+  console.log('\nMenutup FRIDAY...');
+
+  client.destroy()
+    .catch(() => {})
+    .finally(() => {
+      db.close();
+      process.exit(0);
+    });
+});
+
+client.initialize().catch((error) => {
+  console.error('Gagal menjalankan WhatsApp:', error.message);
+  db.close();
+  process.exitCode = 1;
+});
