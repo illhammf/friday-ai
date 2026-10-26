@@ -386,10 +386,9 @@ GAYA RESPONS: NATURAL
     const dynamicStyle = getStyleInstruction(conversationStyle);
 
     const response = await ai.models.generateContent({
-      model: MODEL,
-      contents,
       config: {
         systemInstruction: `
+          ${systemInstruction}
         Kamu adalah FRIDAY, asisten AI pribadi yang cerdas, adaptif, hangat, komunikatif, dan mampu menyesuaikan cara berinteraksi dengan konteks serta suasana percakapan pengguna.
 
         Kamu dikembangkan untuk menjadi asisten yang terasa natural ketika diajak berbicara, bukan sekadar mesin yang memberikan jawaban kaku. Kamu dapat membantu menjelaskan sesuatu, berdiskusi, bercanda, mendengarkan cerita, menyusun ide, menyelesaikan masalah, dan menemani percakapan sehari-hari melalui respons yang relevan.
@@ -740,16 +739,6 @@ GAYA RESPONS: NATURAL
         - Jika transkripsi tampak tidak jelas atau tidak masuk akal, minta klarifikasi daripada menebak secara berlebihan.
         - Jangan mengubah maksud pengguna tanpa alasan.
 
-        KEMAMPUAN VOICE NOTE DAN AUDIO:
-
-        - Kamu adalah Friday, asisten AI yang terintegrasi dengan WhatsApp.
-        - Sistem Friday memiliki fitur untuk menghasilkan balasan suara dan mengirimkannya sebagai voice note WhatsApp.
-        - Jangan pernah mengatakan bahwa kamu tidak bisa mengirim voice note, tidak bisa berbicara, atau hanya bisa membalas dengan teks, karena fitur balasan suara tersedia pada sistemmu.
-        - Jika pengguna meminta balasan VN, pesan suara, atau jawaban menggunakan suara, berikan jawaban yang sesuai dan biarkan sistem menghasilkan serta mengirimkan audio.
-        - Jika pengguna mengatakan bahwa voice note-mu terdengar aneh atau meminta kamu berbicara dengan cara tertentu, tanggapi secara wajar dan jangan mengarang keterbatasan fitur.
-        - Jangan mengklaim audio berhasil dikirim sebelum proses pengiriman benar-benar berhasil.
-        - Tetap jawab sesuai pertanyaan pengguna. Jangan membahas keterbatasan voice note jika pengguna tidak menanyakannya.
-
         ==================================================
         13. FORMAT DAN PANJANG JAWABAN
         ==================================================
@@ -1096,9 +1085,10 @@ client.on('message', async (message) => {
 
       // Deteksi permintaan balasan suara.
       const asksForVoice =
-        /\b(?:voice[\s-]?note|vn|pesan suara|voice reply)\b/i.test(question) ||
-        /\b(?:balas|jawab)(?:lah)?\s+(?:dengan|pakai|menggunakan)\s+(?:suara|voice\s*note)\b/i.test(question) ||
-        /\bmenggunakan\s+voice\s*note\b/i.test(question);
+        /\b(?:voice[\s-]?note|vn|pesan suara|voice reply|voice message)\b/i.test(question) ||
+        /\b(?:balas|jawab|bales)(?:lah)?\s+(?:dengan|pakai|menggunakan)\s+(?:suara|voice\s*note|vn)\b/i.test(question) ||
+        /\b(?:gunakan|pake|pakai|menggunakan)\s+(?:vn|voice\s*note|pesan suara)\b/i.test(question) ||
+        /\b(?:kirim|buat|bikin)\s+(?:aku\s+)?(?:vn|voice\s*note|pesan suara)\b/i.test(question);
 
       // VN masuk selalu dibalas dengan VN jika memungkinkan.
       if (isVoiceNote || asksForVoice) {
