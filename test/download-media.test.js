@@ -6,11 +6,9 @@ test('returns media when the first download attempt succeeds', async () => {
   const media = { mimetype: 'image/jpeg', data: 'image-data' };
   let attempts = 0;
 
-  const result = await downloadMediaWithRetry({
-    async downloadMedia() {
-      attempts++;
-      return media;
-    },
+  const result = await downloadMediaWithRetry({}, async () => {
+    attempts++;
+    return media;
   });
 
   assert.equal(result, media);
@@ -21,14 +19,12 @@ test('retries once when WhatsApp media download fails temporarily', async () => 
   const media = { mimetype: 'image/jpeg', data: 'image-data' };
   let attempts = 0;
 
-  const result = await downloadMediaWithRetry({
-    async downloadMedia() {
-      attempts++;
-      if (attempts === 1) {
-        throw new Error('Temporary WhatsApp download failure');
-      }
-      return media;
-    },
+  const result = await downloadMediaWithRetry({}, async () => {
+    attempts++;
+    if (attempts === 1) {
+      throw new Error('Temporary WhatsApp download failure');
+    }
+    return media;
   });
 
   assert.equal(result, media);
@@ -40,11 +36,9 @@ test('preserves the final download error after retrying', async () => {
   let attempts = 0;
 
   await assert.rejects(
-    downloadMediaWithRetry({
-      async downloadMedia() {
-        attempts++;
-        throw error;
-      },
+    downloadMediaWithRetry({}, async () => {
+      attempts++;
+      throw error;
     }),
     (result) => {
       assert.match(result.message, /setelah 2 percobaan/);

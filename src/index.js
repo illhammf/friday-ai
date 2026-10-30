@@ -540,10 +540,32 @@ client.on('message', async (message) => {
         } catch (error) {
           const cause = error?.cause;
           const detail = cause?.message || error?.message || String(error);
+          const mediaDetails = [
+            `type=${message.type}`,
+            `hasMedia=${message.hasMedia}`,
+            `mimetype=${message._data?.mimetype || 'unknown'}`,
+            `size=${message._data?.size ?? 'unknown'}`,
+            `directPath=${Boolean(message._data?.directPath)}`,
+            `mediaKey=${Boolean(message._data?.mediaKey)}`,
+            `encFilehash=${Boolean(message._data?.encFilehash)}`,
+            `mediaStage=${message._data?.mediaData?.mediaStage || 'unknown'}`,
+          ].join(' ');
 
-          logEvent('error', 'WhatsApp gagal mengunduh gambar', detail);
+          console.error('[Detail unduhan media]', mediaDetails);
+          console.error(
+            '[Error unduhan media]',
+            inspect(cause?.mediaDiagnostic || error, {
+              depth: 8,
+              colors: false,
+            }),
+          );
+          logEvent(
+            'error',
+            'WhatsApp gagal mengunduh gambar',
+            detail,
+          );
           await message.reply(
-            'Aku menerima pesan gambarnya, tapi WhatsApp belum berhasil mengunduh file tersebut. Coba kirim ulang sebagai foto biasa (bukan sekali lihat).'
+            'Aku menerima fotonya, tetapi WhatsApp gagal mengunduh file gambar. Coba teruskan fotonya ke chat Friday. Jika masih gagal, admin perlu memeriksa detail error WhatsApp Web di log.'
           );
           return;
         }
