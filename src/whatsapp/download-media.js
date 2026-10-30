@@ -48,102 +48,42 @@ async function downloadMediaInWhatsAppPage(message) {
           throw new Error('WhatsApp media download manager is unavailable.');
         }
 
-        const originalFetch = window.fetch;
-        let normalizedMimeResponses = 0;
+        const decryptedMedia = await manager.downloadAndMaybeDecrypt({
+          directPath: msg.directPath,
+          encFilehash: msg.encFilehash,
+          filehash: msg.filehash,
+          mediaKey: msg.mediaKey,
+          mediaKeyTimestamp: msg.mediaKeyTimestamp,
+          type: msg.type,
+          mimetype: msg.mimetype,
+          signal: new AbortController().signal,
+          downloadQpl: {
+            addAnnotations() {
+              return this;
+            },
+            addPoint() {
+              return this;
+            },
+          },
+        });
 
-        const patchedFetch = async function (...args) {
-          const response = await originalFetch.apply(this, args);
+        const data = await window.WWebJS.arrayBufferToBase64Async(
+          decryptedMedia,
+        );
 
-          if (
-            msg.type !== 'image' ||
-            !msg.mimetype?.startsWith('image/') ||
-            response.headers.get('content-type')
-              ?.split(';', 1)[0]
-              ?.trim()
-              .toLowerCase() !== 'application/octet-stream'
-          ) {
-            return response;
-          }
-
-          let responseUrl;
-
-          try {
-            responseUrl = new URL(response.url);
-          } catch {
-            return response;
-          }
-
-          const hostname = responseUrl.hostname.toLowerCase();
-          const isWhatsAppMediaHost =
-            hostname === 'whatsapp.net' ||
-            hostname.endsWith('.whatsapp.net') ||
-            hostname === 'fbcdn.net' ||
-            hostname.endsWith('.fbcdn.net');
-
-          if (!isWhatsAppMediaHost || !response.ok || !response.body) {
-            return response;
-          }
-
-          const headers = new Headers(response.headers);
-          headers.set('content-type', msg.mimetype);
-          normalizedMimeResponses++;
-
-          return new Response(response.clone().body, {
-            status: response.status,
-            statusText: response.statusText,
-            headers,
-          });
+        return {
+          data,
+          mimetype: msg.mimetype,
+          filename: msg.filename || null,
+          filesize: msg.size ?? null,
         };
-
-        if (typeof originalFetch === 'function') {
-          window.fetch = patchedFetch;
-        }
-
-        try {
-          const decryptedMedia = await manager.downloadAndMaybeDecrypt({
-            directPath: msg.directPath,
-            encFilehash: msg.encFilehash,
-            filehash: msg.filehash,
-            mediaKey: msg.mediaKey,
-            mediaKeyTimestamp: msg.mediaKeyTimestamp,
-            type: msg.type,
-            signal: new AbortController().signal,
-            downloadQpl: {
-              addAnnotations() {
-                return this;
-              },
-              addPoint() {
-                return this;
-              },
-            },
-          });
-
-          const data = await window.WWebJS.arrayBufferToBase64Async(
-            decryptedMedia,
-          );
-
-          return {
-            media: {
-              data,
-              mimetype: msg.mimetype,
-              filename: msg.filename || null,
-              filesize: msg.size ?? null,
-            },
-            normalizedMimeResponses,
-          };
-        } finally {
-          if (window.fetch === patchedFetch) {
-            window.fetch = originalFetch;
-          }
-        }
       };
 
       try {
-        const { media, normalizedMimeResponses } = await download();
+        const media = await download();
         return {
           ok: true,
           media,
-          normalizedMimeResponses,
           errors,
         };
       } catch (error) {
@@ -167,11 +107,10 @@ async function downloadMediaInWhatsAppPage(message) {
         }
 
         try {
-          const { media, normalizedMimeResponses } = await download();
+          const media = await download();
           return {
             ok: true,
             media,
-            normalizedMimeResponses,
             errors,
           };
         } catch (error) {
@@ -205,10 +144,7 @@ async function downloadMediaInWhatsAppPage(message) {
   }, message.id._serialized);
 
   if (result?.ok && result.media) {
-    return {
-      ...result.media,
-      normalizedMimeResponses: result.normalizedMimeResponses || 0,
-    };
+    return result.media;
   }
 
   if (!result) {

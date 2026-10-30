@@ -49,7 +49,7 @@ test('preserves the final download error after retrying', async () => {
   assert.equal(attempts, 2);
 });
 
-test('normalizes WhatsApp octet-stream image responses before decryption', async () => {
+test('passes the message MIME type to WhatsApp media decryption', async () => {
   const originalWindow = globalThis.window;
   const mediaMessage = {
     directPath: '/media/image',
@@ -62,18 +62,8 @@ test('normalizes WhatsApp octet-stream image responses before decryption', async
     size: 12,
     mediaData: { mediaStage: 'RESOLVED' },
   };
-  const originalFetch = async () => {
-    const response = new Response(Buffer.from('image bytes'), {
-      headers: { 'content-type': 'application/octet-stream' },
-    });
-    Object.defineProperty(response, 'url', {
-      value: 'https://mmg.whatsapp.net/media/image',
-    });
-    return response;
-  };
 
   globalThis.window = {
-    fetch: originalFetch,
     require(name) {
       if (name === 'WAWebCollections') {
         return {
@@ -86,13 +76,10 @@ test('normalizes WhatsApp octet-stream image responses before decryption', async
       if (name === 'WAWebDownloadManager') {
         return {
           downloadManager: {
-            async downloadAndMaybeDecrypt() {
-              const response = await window.fetch(
-                'https://mmg.whatsapp.net/media/image',
-              );
-              const blob = await response.blob();
-              assert.equal(blob.type, 'image/jpeg');
-              return blob.arrayBuffer();
+            async downloadAndMaybeDecrypt(options) {
+              assert.equal(options.type, 'image');
+              assert.equal(options.mimetype, 'image/jpeg');
+              return Buffer.from('image bytes');
             },
           },
         };
@@ -120,11 +107,7 @@ test('normalizes WhatsApp octet-stream image responses before decryption', async
     });
 
     assert.equal(media.mimetype, 'image/jpeg');
-    assert.equal(
-      Buffer.from(media.data, 'base64').toString(),
-      'image bytes',
-    );
-    assert.equal(window.fetch, originalFetch);
+    assert.equal(Buffer.from(media.data, 'base64').toString(), 'image bytes');
   } finally {
     if (originalWindow === undefined) {
       delete globalThis.window;
