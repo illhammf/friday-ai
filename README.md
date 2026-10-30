@@ -9,8 +9,9 @@ Personal WhatsApp assistant built with Node.js, WhatsApp Web, and Gemini.
 - `ffmpeg` (used for voice notes and social-video remuxing)
 - `yt-dlp` available on `PATH` to download public TikTok and Instagram video links
 
-Copy `.env.example` to `.env`, then set `GEMINI_API_KEY`. `YT_DLP_PATH` can be
-set to the full executable path if `yt-dlp` is not available on `PATH`.
+Copy `.env.example` to `.env`, then set `GEMINI_API_KEY`. `YT_DLP_PATH` and
+`FFMPEG_PATH` can be set to their executable paths if either program is not
+available on `PATH`.
 
 ## Media features
 
@@ -22,17 +23,25 @@ set to the full executable path if `yt-dlp` is not available on `PATH`.
   "gambar burung". Requests to describe or caption an existing image stay in
   the normal chat flow. `GEMINI_IMAGE_MODEL` controls the Gemini
   image-generation model; the default is `gemini-3.1-flash-image`.
-- Send one public TikTok or Instagram video URL to download and return the
-  video. Downloads are limited to 64 MB and three minutes. Private content,
-  login-required content, and content protected by access restrictions are not
-  supported. Only download content you are authorized to use.
+- Send a public TikTok or Instagram video URL with an explicit request such as
+  "download video ini https://www.tiktok.com/@user/video/..." to download and
+  return the video. Sending a link alone does not start a download. Downloads
+  are limited to 64 MB and three minutes. Private content, login-required
+  content, and content protected by access restrictions are not supported.
+  Only download content you are authorized to use.
 
 Video downloads require `yt-dlp` and `ffmpeg` to be installed on the machine
 running Friday. Install them using your operating system's package manager or
 the projects' official installation instructions.
 
+Run `npm run doctor` to check the Node.js version, whether `GEMINI_API_KEY` is
+configured (its value is never displayed), and whether `yt-dlp` and `ffmpeg`
+are available. Missing media tools are reported as warnings so text chat and
+other available features can continue working.
+
 ## Commands
 
 - `npm start` starts Friday.
 - `npm run check` checks the entry point syntax.
+- `npm run doctor` checks runtime and media-tool setup.
 - `npm test` runs the automated tests.

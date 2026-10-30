@@ -9,7 +9,8 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "check": "node --check src/index.js",
-    "test": "node --test test/social-video.test.js test/image-generation.test.js test/download-media.test.js test/voice-note-failure.test.js"
+    "doctor": "node scripts/doctor.js",
+    "test": "node --test test/social-video.test.js test/image-generation.test.js test/download-media.test.js test/voice-note-failure.test.js test/runtime-diagnostics.test.js"
   },
   "keywords": [
     "friday-ai",

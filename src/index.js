@@ -27,7 +27,12 @@ import {
   downloadSocialVideo,
   getSocialVideoUrls,
 } from './video/download-social-video.js';
+import { isSocialVideoDownloadRequest } from './video/video-download-request.js';
 import { downloadMediaWithRetry } from './whatsapp/download-media.js';
+import {
+  getRuntimeSummary,
+  inspectRuntime,
+} from './config/runtime-diagnostics.js';
 import whatsapp from 'whatsapp-web.js';
 import qrcode from 'qrcode-terminal';
 import { inspect } from 'node:util';
@@ -346,6 +351,29 @@ client.on('disconnected', (reason) => {
   console.warn('WhatsApp terputus:', reason);
 });
 
+async function logRuntimeDiagnostics() {
+  const results = await inspectRuntime();
+  const summary = getRuntimeSummary(results);
+
+  for (const result of results) {
+    if (result.ok) {
+      logEvent('success', `${result.label} tersedia`, result.detail);
+    } else {
+      const eventType = result.required ? 'error' : 'warn';
+      logEvent(eventType, `${result.label} belum siap`, result.detail);
+      console.warn(`[Runtime] ${result.guidance}`);
+    }
+  }
+
+  if (summary.requiredFailed.length > 0) {
+    logEvent(
+      'warn',
+      'Friday berjalan dengan runtime yang tidak didukung',
+      'Perbaiki kebutuhan wajib yang ditandai ERROR.',
+    );
+  }
+}
+
 
 client.on('message', async (message) => {
   
@@ -446,8 +474,11 @@ client.on('message', async (message) => {
     }
 
     const socialVideoUrls = getSocialVideoUrls(question);
+    const asksToDownloadVideo =
+      socialVideoUrls.length > 0 &&
+      isSocialVideoDownloadRequest(question);
 
-    if (socialVideoUrls.length > 1) {
+    if (asksToDownloadVideo && socialVideoUrls.length > 1) {
       await message.reply(
         'Kirim satu tautan TikTok atau Instagram dulu ya, supaya aku bisa mengunduh videonya.'
       );
@@ -482,7 +513,7 @@ client.on('message', async (message) => {
     activeChats.add(sessionId);
 
     try {
-      if (socialVideoUrls.length === 1) {
+      if (asksToDownloadVideo && socialVideoUrls.length === 1) {
         let videoResult = null;
 
         try {
@@ -494,6 +525,36 @@ client.on('message', async (message) => {
           });
 
           logEvent('success', 'Video berhasil diunduh dan dikirim', 'WhatsApp');
+        } catch (error) {
+          const errorMessage = String(error?.message || error);
+          const errorCode = error?.code;
+
+          console.error(
+            '[Unduhan video gagal]',
+            inspect(error, { depth: 4, colors: false }),
+          );
+
+          let reply;
+
+          if (errorCode === 'YT_DLP_NOT_INSTALLED') {
+            reply =
+              'Fitur unduh video belum siap di server Friday. Admin perlu memasang yt-dlp dan ffmpeg terlebih dahulu.';
+          } else if (errorCode === 'FFMPEG_NOT_INSTALLED') {
+            reply =
+              'Fitur unduh video belum siap di server Friday. Admin perlu memasang ffmpeg terlebih dahulu.';
+          } else if (/64 MB|too large|maximum file size/i.test(errorMessage)) {
+            reply =
+              'Video terlalu besar untuk dikirim lewat WhatsApp. Coba tautan video yang lebih pendek atau berukuran lebih kecil ya.';
+          } else if (error?.killed || error?.signal === 'SIGTERM') {
+            reply =
+              'Proses unduh video terlalu lama dan dihentikan. Coba lagi nanti atau gunakan tautan lain ya.';
+          } else {
+            reply =
+              'Video belum berhasil diunduh. Pastikan tautannya publik dan videonya bisa diakses, lalu coba lagi ya.';
+          }
+
+          await message.reply(reply);
+          logEvent('error', 'Unduhan video gagal', errorCode || 'periksa log terminal');
         } finally {
           if (videoResult?.cleanup) {
             await videoResult.cleanup();
@@ -835,8 +896,10 @@ process.on('SIGINT', () => {
 
 printBanner();
 
-client.initialize().catch((error) => {
-  console.error('Gagal menjalankan WhatsApp:', error.message);
-  closeDatabase();
-  process.exitCode = 1;
-});
+logRuntimeDiagnostics()
+  .then(() => client.initialize())
+  .catch((error) => {
+    console.error('Gagal menjalankan WhatsApp:', error.message);
+    closeDatabase();
+    process.exitCode = 1;
+  });
