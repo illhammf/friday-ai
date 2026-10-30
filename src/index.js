@@ -17,6 +17,7 @@ import {
   downloadSocialVideo,
   getSocialVideoUrls,
 } from './video/download-social-video.js';
+import { downloadMediaWithRetry } from './whatsapp/download-media.js';
 import whatsapp from 'whatsapp-web.js';
 import qrcode from 'qrcode-terminal';
 import { inspect } from 'node:util';
@@ -501,7 +502,7 @@ client.on('message', async (message) => {
 
       // Unduh dan transkripsikan Voice Note masuk.
       if (isVoiceNote) {
-        const media = await message.downloadMedia();
+        const media = await downloadMediaWithRetry(message);
 
         if (!media) {
           await message.reply(
@@ -532,10 +533,20 @@ client.on('message', async (message) => {
       let image = null;
 
       if (isImage) {
-        console.log('[DEBUG] ID pesan:', JSON.stringify(message.id));
-        console.log('[DEBUG] _serialized:', message.id?._serialized);
-        console.log('[DEBUG] $1:', message.id?.$1);
-        const media = await message.downloadMedia();
+        let media;
+
+        try {
+          media = await downloadMediaWithRetry(message);
+        } catch (error) {
+          const cause = error?.cause;
+          const detail = cause?.message || error?.message || String(error);
+
+          logEvent('error', 'WhatsApp gagal mengunduh gambar', detail);
+          await message.reply(
+            'Aku menerima pesan gambarnya, tapi WhatsApp belum berhasil mengunduh file tersebut. Coba kirim ulang sebagai foto biasa (bukan sekali lihat).'
+          );
+          return;
+        }
 
         if (!media) {
           await message.reply('Maaf, gambar belum bisa dibaca. Coba kirim ulang ya.');
