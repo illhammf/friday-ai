@@ -7,6 +7,7 @@ const [
     extractGeneratedImage,
     generateImage,
     getImageGenerationFailureMessage,
+    getImageGenerationQuotaDiagnostic,
     isImageGenerationQuotaError,
     IMAGE_MODEL,
   },
@@ -184,7 +185,7 @@ test('does not retry exhausted Gemini image quotas', async () => {
     error: {
       code: 429,
       status: 'RESOURCE_EXHAUSTED',
-      message: 'You exceeded your current quota.',
+      message: 'You exceeded your current quota. Free Tier limit: 0.',
       details: [
         {
           '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
@@ -211,12 +212,21 @@ test('does not retry exhausted Gemini image quotas', async () => {
 
   assert.equal(attempts, 1);
   assert.equal(isImageGenerationQuotaError(quotaError), true);
+  const diagnostic = getImageGenerationQuotaDiagnostic(quotaError);
+  assert.equal(diagnostic.model, IMAGE_MODEL);
+  assert.equal(diagnostic.freeTierLimitZero, true);
+  assert.match(diagnostic.details, /Requests per day limit exceeded/);
+  assert.match(diagnostic.retryText, /sekitar 16 jam 11 menit/);
   assert.match(
     getImageGenerationFailureMessage(quotaError),
-    /sekitar 16 jam 11 menit/,
+    /menunggu saja mungkin tidak cukup/,
   );
   assert.match(
     getImageGenerationFailureMessage(quotaError),
-    /billing di Google AI Studio/,
+    /https:\/\/aistudio\.google\.com\//,
+  );
+  assert.match(
+    getImageGenerationFailureMessage(quotaError),
+    /rate-limits/,
   );
 });

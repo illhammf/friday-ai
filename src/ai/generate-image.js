@@ -57,9 +57,36 @@ export function isImageGenerationQuotaError(error) {
   );
 }
 
+function getApiErrorPayload(error) {
+  const directPayload = error?.error || error?.response?.data;
+
+  if (directPayload && typeof directPayload === 'object') {
+    return directPayload.error || directPayload;
+  }
+
+  const message = String(error?.message || '');
+  const jsonStart = message.indexOf('{"error"');
+
+  if (jsonStart === -1) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(message.slice(jsonStart));
+    return parsed.error || parsed;
+  } catch {
+    return null;
+  }
+}
+
 function getRetryDelaySeconds(error) {
-  const details = getErrorText(error);
-  const match = details.match(/retryDelay["']?\s*:\s*["']?(\d+(?:\.\d+)?)s/i);
+  const payload = getApiErrorPayload(error);
+  const retryInfo = payload?.details?.find((detail) =>
+    detail?.['@type']?.endsWith('.RetryInfo'),
+  );
+  const retryDelay = retryInfo?.retryDelay;
+  const match = String(retryDelay || getErrorText(error))
+    .match(/(\d+(?:\.\d+)?)\s*s/i);
 
   if (match) {
     return Number(match[1]);
@@ -85,20 +112,56 @@ function formatRetryDelay(seconds) {
   return `sekitar ${Math.max(1, minutes)} menit`;
 }
 
+function getQuotaViolations(error) {
+  const payload = getApiErrorPayload(error);
+  const quotaFailure = payload?.details?.find((detail) =>
+    detail?.['@type']?.endsWith('.QuotaFailure'),
+  );
+  const descriptions = (quotaFailure?.violations || [])
+    .map((violation) => violation?.description)
+    .filter(Boolean);
+
+  return [...new Set(descriptions)].slice(0, 3);
+}
+
+export function getImageGenerationQuotaDiagnostic(error, model = IMAGE_MODEL) {
+  const violations = getQuotaViolations(error);
+  const retryDelay = getRetryDelaySeconds(error);
+  const details = violations.length
+    ? violations.join('; ')
+    : 'Gemini API menolak request karena kuota atau limit model.';
+  const retryText = retryDelay
+    ? `Estimasi API untuk mencoba lagi: ${formatRetryDelay(retryDelay)}.`
+    : 'API tidak memberikan estimasi waktu untuk mencoba lagi.';
+
+  return {
+    model,
+    details,
+    retryText,
+    freeTierLimitZero: /free.?tier.*limit[: ]+0|limit[: ]+0.*free.?tier/i.test(
+      `${details} ${getErrorText(error)}`,
+    ),
+  };
+}
+
 export function getImageGenerationFailureMessage(error) {
   if (!isImageGenerationQuotaError(error)) {
     return 'Maaf, gambar belum berhasil dibuat. Coba ubah deskripsinya atau coba lagi beberapa saat ya.';
   }
 
-  const retryDelay = getRetryDelaySeconds(error);
-  const retryText = retryDelay
-    ? ` Coba lagi ${formatRetryDelay(retryDelay)}.`
+  const diagnostic = getImageGenerationQuotaDiagnostic(error);
+  const zeroFreeTier = diagnostic.freeTierLimitZero
+    ? ' Respons API menyebut limit Free Tier untuk model ini 0, jadi menunggu saja mungkin tidak cukup.'
     : '';
 
   return (
-    'Kuota Gemini untuk model gambar sedang habis atau belum tersedia di paket API project ini. ' +
-    'Periksa kuota model dan pengaturan billing di Google AI Studio sebelum mencoba lagi.' +
-    retryText
+    `Kuota Gemini API untuk model ${diagnostic.model} sedang habis atau tidak tersedia. ` +
+    `${diagnostic.retryText}${zeroFreeTier}\n\n` +
+    'Langkah berikutnya:\n' +
+    '1. Buka https://aistudio.google.com/ dan pastikan project yang dipakai API key Friday benar.\n' +
+    '2. Cek limit model di https://ai.google.dev/gemini-api/docs/rate-limits.\n' +
+    '3. Jika limit Free Tier model ini 0, cek kelayakan billing/plan atau gunakan model gambar lain yang tersedia untuk project tersebut.\n' +
+    'Setelah akses kuota berubah, restart Friday lalu coba lagi.'
   );
 }
 

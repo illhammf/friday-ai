@@ -13,6 +13,8 @@ import { detectConversationStyle, getStyleInstruction } from './ai/conversation-
 import {
   generateImage,
   getImageGenerationFailureMessage,
+  getImageGenerationQuotaDiagnostic,
+  isImageGenerationQuotaError,
 } from './ai/generate-image.js';
 import { isImageGenerationRequest } from './ai/image-generation-request.js';
 import { systemInstruction } from './config/system-instruction.js';
@@ -598,10 +600,29 @@ client.on('message', async (message) => {
         try {
           generatedImage = await generateImage(question);
         } catch (error) {
-          console.error(
-            '[Pembuatan gambar gagal]',
-            inspect(error, { depth: 5, colors: false }),
-          );
+          if (isImageGenerationQuotaError(error)) {
+            const diagnostic = getImageGenerationQuotaDiagnostic(error);
+            const terminalDetails = [
+              diagnostic.details,
+              diagnostic.retryText,
+              diagnostic.freeTierLimitZero
+                ? 'Free Tier limit model=0; menunggu saja mungkin tidak cukup.'
+                : '',
+              'Tindakan: cek project API key, kuota model, dan billing/plan di Google AI Studio.',
+            ].filter(Boolean).join(' ');
+
+            logEvent(
+              'error',
+              'Kuota generate gambar tidak tersedia',
+              `${diagnostic.model} │ ${terminalDetails}`,
+            );
+          } else {
+            console.error(
+              '[Pembuatan gambar gagal]',
+              inspect(error, { depth: 5, colors: false }),
+            );
+          }
+
           await message.reply(getImageGenerationFailureMessage(error));
           return;
         }
