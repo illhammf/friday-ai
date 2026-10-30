@@ -18,8 +18,10 @@ set to the full executable path if `yt-dlp` is not available on `PATH`.
   sent with the photo is included in the request.
 - Ask Friday to make an image, for example: "Buatkan gambar kucing astronot".
   Requests such as "bikin foto pemandangan pantai" and "generate an image of a
-  cabin in the snow" are also supported. `GEMINI_IMAGE_MODEL` controls the
-  Gemini image-generation model; the default is `gemini-3.1-flash-image`.
+  cabin in the snow" are also supported, as are short prompts such as
+  "gambar burung". Requests to describe or caption an existing image stay in
+  the normal chat flow. `GEMINI_IMAGE_MODEL` controls the Gemini
+  image-generation model; the default is `gemini-3.1-flash-image`.
 - Send one public TikTok or Instagram video URL to download and return the
   video. Downloads are limited to 64 MB and three minutes. Private content,
   login-required content, and content protected by access restrictions are not

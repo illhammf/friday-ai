@@ -585,7 +585,11 @@ client.on('message', async (message) => {
       }
 
       if (!image && isImageGenerationRequest(question)) {
-        logEvent('ai', 'Membuat gambar dengan Gemini');
+        logEvent(
+          'ai',
+          'Permintaan gambar dikenali',
+          `Model: ${process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image'}`,
+        );
         let generatedImage;
 
         try {

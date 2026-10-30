@@ -17,6 +17,10 @@ test('recognizes common Indonesian and English image-generation requests', () =>
     'Tolong bikin foto pemandangan pantai saat senja',
     'Generate an image of a cozy cabin in the snow',
     'Gambarin logo sederhana untuk toko kopi',
+    'Gambarkan burung merpati di dahan',
+    'Gambar burung elang',
+    'Bisa gambar burung hantu?',
+    'Mau gambar burung kenari',
     'Buat aku wallpaper bertema luar angkasa',
   ]) {
     assert.equal(isImageGenerationRequest(prompt), true, prompt);
@@ -29,6 +33,11 @@ test('does not treat image questions or text-only image tasks as generation', ()
     'Buat caption untuk gambar produk ini',
     'Jangan buat gambar dulu',
     'Tidak usah buatkan gambar sekarang',
+    'Jelaskan gambar burung ini',
+    'Apa isi gambar burung ini?',
+    'Jelasin gambar burung ini',
+    'Ceritain gambar burung ini',
+    'Caption untuk gambar burung',
     'Apa isi foto ini?',
     '',
   ]) {
