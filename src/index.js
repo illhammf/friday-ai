@@ -10,8 +10,13 @@ import {
   closeDatabase,
 } from './database/history.js';
 import { detectConversationStyle, getStyleInstruction } from './ai/conversation-style.js';
+import { generateImage } from './ai/generate-image.js';
 import { systemInstruction } from './config/system-instruction.js';
 import { ai } from './ai/gemini.js';
+import {
+  downloadSocialVideo,
+  getSocialVideoUrls,
+} from './video/download-social-video.js';
 import whatsapp from 'whatsapp-web.js';
 import qrcode from 'qrcode-terminal';
 import { inspect } from 'node:util';
@@ -23,6 +28,13 @@ const BOT_NAME = process.env.BOT_NAME || 'Friday';
 const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 
 const FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || '';
+
+function isImageGenerationRequest(question) {
+  return (
+    /\b(?:buat(?:kan)?|bikin(?:kan)?|generate|ciptakan|gambarkan)\b/i.test(question) &&
+    /\b(?:gambar|foto|image|ilustrasi|poster|wallpaper|logo)\b/i.test(question)
+  );
+}
 
 const sleep = (ms) =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -429,6 +441,15 @@ client.on('message', async (message) => {
       return;
     }
 
+    const socialVideoUrls = getSocialVideoUrls(question);
+
+    if (socialVideoUrls.length > 1) {
+      await message.reply(
+        'Kirim satu tautan TikTok atau Instagram dulu ya, supaya aku bisa mengunduh videonya.'
+      );
+      return;
+    }
+
     // Identitas dan sesi percakapan.
     const senderId = isGroup
       ? (message.author || message.from)
@@ -457,6 +478,27 @@ client.on('message', async (message) => {
     activeChats.add(sessionId);
 
     try {
+      if (socialVideoUrls.length === 1) {
+        let videoResult = null;
+
+        try {
+          videoResult = await downloadSocialVideo(socialVideoUrls[0]);
+          const videoMedia = MessageMedia.fromFilePath(videoResult.path);
+
+          await client.sendMessage(message.from, videoMedia, {
+            caption: 'Ini video dari tautan yang kamu kirim.',
+          });
+
+          logEvent('success', 'Video berhasil diunduh dan dikirim', 'WhatsApp');
+        } finally {
+          if (videoResult?.cleanup) {
+            await videoResult.cleanup();
+          }
+        }
+
+        return;
+      }
+
       // Unduh dan transkripsikan Voice Note masuk.
       if (isVoiceNote) {
         const media = await message.downloadMedia();
@@ -513,6 +555,39 @@ client.on('message', async (message) => {
         if (!question) {
           question = 'Jelaskan gambar ini secara rinci.';
         }
+      }
+
+      if (!image && isImageGenerationRequest(question)) {
+        const generatedImage = await generateImage(question);
+        const extension = generatedImage.mimeType === 'image/jpeg'
+          ? 'jpg'
+          : generatedImage.mimeType === 'image/webp'
+            ? 'webp'
+            : 'png';
+        const imageMedia = new MessageMedia(
+          generatedImage.mimeType,
+          generatedImage.data,
+          `friday-generated.${extension}`,
+        );
+        const caption = (
+          generatedImage.text || 'Ini gambar yang kamu minta.'
+        ).slice(0, 1000);
+
+        await client.sendMessage(message.from, imageMedia, { caption });
+
+        const activeSession = sharedGroupSession || privateSession;
+        const userMessage = isGroup
+          ? `${senderName}: ${question}`
+          : question;
+
+        saveMessage(activeSession, 'user', userMessage);
+        saveMessage(
+          activeSession,
+          'model',
+          `Gambar dibuat untuk permintaan: ${question}`,
+        );
+        logEvent('success', 'Gambar berhasil dibuat dan dikirim', 'WhatsApp');
+        return;
       }
 
       logDivider();
