@@ -15,12 +15,90 @@ const sleep = (ms) =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 function isTemporaryGeminiError(error) {
+  if (isImageGenerationQuotaError(error)) {
+    return false;
+  }
+
   const status = Number(error?.status || error?.code);
   const message = String(error?.message || error);
 
   return (
-    [429, 500, 502, 503, 504].includes(status) ||
+    status === 429 ||
+    [500, 502, 503, 504].includes(status) ||
     /\b429\b|\b500\b|\b502\b|\b503\b|\b504\b|UNAVAILABLE|high demand|rate.?limit|quota exceeded|overloaded|temporarily unavailable/i.test(message)
+  );
+}
+
+function getErrorText(error) {
+  const values = [
+    error?.message,
+    error?.status,
+    error?.code,
+    error?.error?.message,
+    error?.error?.status,
+    error?.response?.data,
+  ];
+
+  return values
+    .filter((value) => value != null)
+    .map((value) => (
+      typeof value === 'string' ? value : JSON.stringify(value)
+    ))
+    .join(' ');
+}
+
+export function isImageGenerationQuotaError(error) {
+  const status = Number(error?.status || error?.code);
+  const details = getErrorText(error);
+
+  return (
+    /RESOURCE_EXHAUSTED|quota exceeded|exceeded your current quota|limit:\s*0|requests per day|billing details/i.test(details) ||
+    status === 429
+  );
+}
+
+function getRetryDelaySeconds(error) {
+  const details = getErrorText(error);
+  const match = details.match(/retryDelay["']?\s*:\s*["']?(\d+(?:\.\d+)?)s/i);
+
+  if (match) {
+    return Number(match[1]);
+  }
+
+  const seconds = Number(error?.retryDelay);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
+
+function formatRetryDelay(seconds) {
+  const totalMinutes = Math.floor(seconds / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours > 0 && minutes > 0) {
+    return `sekitar ${hours} jam ${minutes} menit`;
+  }
+
+  if (hours > 0) {
+    return `sekitar ${hours} jam`;
+  }
+
+  return `sekitar ${Math.max(1, minutes)} menit`;
+}
+
+export function getImageGenerationFailureMessage(error) {
+  if (!isImageGenerationQuotaError(error)) {
+    return 'Maaf, gambar belum berhasil dibuat. Coba ubah deskripsinya atau coba lagi beberapa saat ya.';
+  }
+
+  const retryDelay = getRetryDelaySeconds(error);
+  const retryText = retryDelay
+    ? ` Coba lagi ${formatRetryDelay(retryDelay)}.`
+    : '';
+
+  return (
+    'Kuota Gemini untuk model gambar sedang habis atau belum tersedia di paket API project ini. ' +
+    'Periksa kuota model dan pengaturan billing di Google AI Studio sebelum mencoba lagi.' +
+    retryText
   );
 }
 

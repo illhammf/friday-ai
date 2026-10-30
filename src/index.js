@@ -10,7 +10,10 @@ import {
   closeDatabase,
 } from './database/history.js';
 import { detectConversationStyle, getStyleInstruction } from './ai/conversation-style.js';
-import { generateImage } from './ai/generate-image.js';
+import {
+  generateImage,
+  getImageGenerationFailureMessage,
+} from './ai/generate-image.js';
 import { isImageGenerationRequest } from './ai/image-generation-request.js';
 import { systemInstruction } from './config/system-instruction.js';
 import { ai } from './ai/gemini.js';
@@ -599,9 +602,7 @@ client.on('message', async (message) => {
             '[Pembuatan gambar gagal]',
             inspect(error, { depth: 5, colors: false }),
           );
-          await message.reply(
-            'Maaf, gambar belum berhasil dibuat. Coba ubah deskripsinya atau coba lagi beberapa saat ya.'
-          );
+          await message.reply(getImageGenerationFailureMessage(error));
           return;
         }
 

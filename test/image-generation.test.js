@@ -3,7 +3,13 @@ import assert from 'node:assert/strict';
 
 process.env.GEMINI_API_KEY = 'test-api-key';
 const [
-  { extractGeneratedImage, generateImage, IMAGE_MODEL },
+  {
+    extractGeneratedImage,
+    generateImage,
+    getImageGenerationFailureMessage,
+    isImageGenerationQuotaError,
+    IMAGE_MODEL,
+  },
   { isImageGenerationRequest },
 ] = await Promise.all([
   import('../src/ai/generate-image.js'),
@@ -169,5 +175,48 @@ test('retries temporary image API failures and propagates permanent errors', asy
       throw permanentError;
     }),
     (error) => error === permanentError,
+  );
+});
+
+test('does not retry exhausted Gemini image quotas', async () => {
+  let attempts = 0;
+  const quotaError = new Error(JSON.stringify({
+    error: {
+      code: 429,
+      status: 'RESOURCE_EXHAUSTED',
+      message: 'You exceeded your current quota.',
+      details: [
+        {
+          '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
+          violations: [{
+            description: 'Requests per day limit exceeded on Free Tier.',
+          }],
+        },
+        {
+          '@type': 'type.googleapis.com/google.rpc.RetryInfo',
+          retryDelay: '58286s',
+        },
+      ],
+    },
+  }));
+  quotaError.status = 429;
+
+  await assert.rejects(
+    generateImage('Gambar burung', async () => {
+      attempts++;
+      throw quotaError;
+    }),
+    (error) => error === quotaError,
+  );
+
+  assert.equal(attempts, 1);
+  assert.equal(isImageGenerationQuotaError(quotaError), true);
+  assert.match(
+    getImageGenerationFailureMessage(quotaError),
+    /sekitar 16 jam 11 menit/,
+  );
+  assert.match(
+    getImageGenerationFailureMessage(quotaError),
+    /billing di Google AI Studio/,
   );
 });
