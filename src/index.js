@@ -1,6 +1,10 @@
 
 import 'dotenv/config';
 import { generateVoiceNote } from './audio/generate-voice-note.js';
+import {
+  getVoiceNoteFailureMessage,
+  isVoiceNoteQuotaError,
+} from './audio/voice-note-failure.js';
 import { transcribeVoiceNote } from './audio/transcribe-voice-note.js';
 import {
   saveMessage,
@@ -713,39 +717,21 @@ client.on('message', async (message) => {
             logEvent('voice', 'Voice Note berhasil dikirim', 'WhatsApp');
 
           } catch (error) {
-            const errorMessage = String(
-              error?.message || error
-            );
-
-            const errorStatus = Number(
-              error?.status || error?.code
-            );
-
-            const isRateLimit =
-              errorStatus === 429 ||
-              /\b429\b|rate.?limit|quota exceeded/i.test(
-                errorMessage
-              );
-
             console.error(
               '[TTS/pengiriman audio gagal]',
-              errorMessage
+              inspect(error, { depth: 6, colors: false }),
             );
 
-            let explanation;
-
-            if (isRateLimit) {
-              explanation =
-                'layanan pembuat suara sedang mencapai batas penggunaan.';
-            } else {
-              explanation =
-                'proses pembuatan atau pengiriman audio sedang mengalami kendala.';
+            if (isVoiceNoteQuotaError(error)) {
+              logEvent(
+                'warn',
+                'Kuota Voice Note tercapai',
+                `Status: ${error?.status || error?.code || 'unknown'}; detail lengkap ada di log terminal.`,
+              );
             }
 
             // Beri tahu pengguna secara natural dan tetap sediakan jawaban teks.
-            const fallbackText =
-              `Maaf, kali ini aku belum berhasil mengirim Voice Note karena ${explanation}\n\n` +
-              `Jawabanku dalam bentuk teks:\n\n${answer}`;
+            const fallbackText = getVoiceNoteFailureMessage(error, answer);
 
             try {
               await message.reply(fallbackText);

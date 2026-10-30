@@ -219,14 +219,7 @@ test('does not retry exhausted Gemini image quotas', async () => {
   assert.match(diagnostic.retryText, /sekitar 16 jam 11 menit/);
   assert.match(
     getImageGenerationFailureMessage(quotaError),
-    /menunggu saja mungkin tidak cukup/,
+    /layanan gambar sedang mencapai batas penggunaan/,
   );
-  assert.match(
-    getImageGenerationFailureMessage(quotaError),
-    /https:\/\/aistudio\.google\.com\//,
-  );
-  assert.match(
-    getImageGenerationFailureMessage(quotaError),
-    /rate-limits/,
-  );
+  assert.doesNotMatch(getImageGenerationFailureMessage(quotaError), /Google AI Studio|Free Tier|https?:\/\//);
 });

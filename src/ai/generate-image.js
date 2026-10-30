@@ -149,20 +149,7 @@ export function getImageGenerationFailureMessage(error) {
     return 'Maaf, gambar belum berhasil dibuat. Coba ubah deskripsinya atau coba lagi beberapa saat ya.';
   }
 
-  const diagnostic = getImageGenerationQuotaDiagnostic(error);
-  const zeroFreeTier = diagnostic.freeTierLimitZero
-    ? ' Respons API menyebut limit Free Tier untuk model ini 0, jadi menunggu saja mungkin tidak cukup.'
-    : '';
-
-  return (
-    `Kuota Gemini API untuk model ${diagnostic.model} sedang habis atau tidak tersedia. ` +
-    `${diagnostic.retryText}${zeroFreeTier}\n\n` +
-    'Langkah berikutnya:\n' +
-    '1. Buka https://aistudio.google.com/ dan pastikan project yang dipakai API key Friday benar.\n' +
-    '2. Cek limit model di https://ai.google.dev/gemini-api/docs/rate-limits.\n' +
-    '3. Jika limit Free Tier model ini 0, cek kelayakan billing/plan atau gunakan model gambar lain yang tersedia untuk project tersebut.\n' +
-    'Setelah akses kuota berubah, restart Friday lalu coba lagi.'
-  );
+  return 'Maaf, aku belum bisa membuat gambar sekarang karena layanan gambar sedang mencapai batas penggunaan. Coba lagi nanti ya.';
 }
 
 export function extractGeneratedImage(response) {
