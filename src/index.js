@@ -580,6 +580,14 @@ client.on('message', async (message) => {
           return;
         }
 
+        if (media.normalizedMimeResponses > 0) {
+          logEvent(
+            'info',
+            'Header MIME foto WhatsApp dinormalisasi',
+            `${media.normalizedMimeResponses} respons`,
+          );
+        }
+
         image = {
           mimetype: media.mimetype,
           data: media.data,
