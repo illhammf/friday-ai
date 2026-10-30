@@ -11,6 +11,7 @@ import {
 } from './database/history.js';
 import { detectConversationStyle, getStyleInstruction } from './ai/conversation-style.js';
 import { generateImage } from './ai/generate-image.js';
+import { isImageGenerationRequest } from './ai/image-generation-request.js';
 import { systemInstruction } from './config/system-instruction.js';
 import { ai } from './ai/gemini.js';
 import {
@@ -29,13 +30,6 @@ const BOT_NAME = process.env.BOT_NAME || 'Friday';
 const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 
 const FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || '';
-
-function isImageGenerationRequest(question) {
-  return (
-    /\b(?:buat(?:kan)?|bikin(?:kan)?|generate|ciptakan|gambarkan)\b/i.test(question) &&
-    /\b(?:gambar|foto|image|ilustrasi|poster|wallpaper|logo)\b/i.test(question)
-  );
-}
 
 const sleep = (ms) =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -591,7 +585,22 @@ client.on('message', async (message) => {
       }
 
       if (!image && isImageGenerationRequest(question)) {
-        const generatedImage = await generateImage(question);
+        logEvent('ai', 'Membuat gambar dengan Gemini');
+        let generatedImage;
+
+        try {
+          generatedImage = await generateImage(question);
+        } catch (error) {
+          console.error(
+            '[Pembuatan gambar gagal]',
+            inspect(error, { depth: 5, colors: false }),
+          );
+          await message.reply(
+            'Maaf, gambar belum berhasil dibuat. Coba ubah deskripsinya atau coba lagi beberapa saat ya.'
+          );
+          return;
+        }
+
         const extension = generatedImage.mimeType === 'image/jpeg'
           ? 'jpg'
           : generatedImage.mimeType === 'image/webp'
