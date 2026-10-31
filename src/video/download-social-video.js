@@ -53,6 +53,7 @@ export function getSocialVideoUrls(text) {
 export async function downloadSocialVideo(
   url,
   runCommand = execFileAsync,
+  runFfmpeg = execFileAsync,
 ) {
   const urls = getSocialVideoUrls(url);
 
@@ -159,10 +160,75 @@ export async function downloadSocialVideo(
       throw new Error('yt-dlp tidak menghasilkan satu file video MP4.');
     }
 
-    const videoPath = videoFiles[0];
-    const videoStats = await stat(videoPath);
+    const sourcePath = videoFiles[0];
+    const sourceStats = await stat(sourcePath);
 
-    if (videoStats.size > MAX_VIDEO_BYTES) {
+    if (sourceStats.size > MAX_VIDEO_BYTES) {
+      throw new Error('Ukuran video melebihi batas pengiriman 64 MB.');
+    }
+
+    const videoPath = join(temporaryDirectory, 'friday-compatible.mp4');
+
+    try {
+      await runFfmpeg(
+        process.env.FFMPEG_PATH || 'ffmpeg',
+        [
+          '-nostdin',
+          '-y',
+          '-i',
+          sourcePath,
+          '-map',
+          '0:v:0',
+          '-map',
+          '0:a:0?',
+          '-c:v',
+          'libx264',
+          '-preset',
+          'veryfast',
+          '-crf',
+          '27',
+          '-pix_fmt',
+          'yuv420p',
+          '-c:a',
+          'aac',
+          '-b:a',
+          '128k',
+          '-ac',
+          '2',
+          '-movflags',
+          '+faststart',
+          videoPath,
+        ],
+        {
+          timeout: VIDEO_DOWNLOAD_TIMEOUT_MS,
+          maxBuffer: 1024 * 1024,
+        },
+      );
+    } catch (error) {
+      if (error?.code === 'ENOENT') {
+        const missingFfmpegError = new Error(
+          'ffmpeg tidak ditemukan. Pasang ffmpeg dan pastikan tersedia di PATH sebelum mengunduh video.',
+          { cause: error },
+        );
+        missingFfmpegError.code = 'FFMPEG_NOT_INSTALLED';
+        throw missingFfmpegError;
+      }
+
+      const transcodeError = new Error(
+        error?.killed
+          ? 'Konversi video melebihi batas waktu.'
+          : 'Video berhasil diunduh, tetapi tidak dapat dikonversi ke format WhatsApp.',
+        { cause: error },
+      );
+      transcodeError.code = error?.killed
+        ? 'VIDEO_TRANSCODE_TIMEOUT'
+        : 'VIDEO_TRANSCODE_FAILED';
+      throw transcodeError;
+    }
+
+    const convertedStats = await stat(videoPath);
+
+    if (convertedStats.size > MAX_VIDEO_BYTES) {
       throw new Error('Ukuran video melebihi batas pengiriman 64 MB.');
     }
 
@@ -170,6 +236,8 @@ export async function downloadSocialVideo(
 
     return {
       path: videoPath,
+      size: convertedStats.size,
+      format: 'H.264/AAC',
       cleanup: () => rm(temporaryDirectory, {
         recursive: true,
         force: true,

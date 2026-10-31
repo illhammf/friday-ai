@@ -87,9 +87,18 @@ test('downloads one MP4 and cleans up its temporary directory', async () => {
       outputPath = outputTemplate.replace('%(id)s.%(ext)s', '123.mp4');
       await (await import('node:fs/promises')).writeFile(outputPath, 'video');
     },
+    async (_command, args) => {
+      assert.ok(args.includes('libx264'));
+      assert.ok(args.includes('yuv420p'));
+      assert.ok(args.includes('aac'));
+      const convertedPath = args.at(-1);
+      await writeFile(convertedPath, 'video');
+    },
   );
 
-  assert.equal(result.path, outputPath);
+  assert.notEqual(result.path, outputPath);
+  assert.equal(result.format, 'H.264/AAC');
+  assert.equal(result.size, 5);
   assert.equal((await (await import('node:fs/promises')).stat(result.path)).size, 5);
   await result.cleanup();
   await assert.rejects(
@@ -126,6 +135,45 @@ test('reports missing ffmpeg separately from other download failures', async () 
       },
     ),
     (error) => error.code === 'FFMPEG_NOT_INSTALLED',
+  );
+});
+
+test('reports when ffmpeg is unavailable during WhatsApp format conversion', async () => {
+  const missingExecutable = Object.assign(new Error('not found'), {
+    code: 'ENOENT',
+  });
+
+  await assert.rejects(
+    downloadSocialVideo(
+      'https://www.tiktok.com/@user/video/123',
+      async (_command, args) => {
+        const outputPath = args[args.indexOf('--output') + 1]
+          .replace('%(id)s.%(ext)s', '123.mp4');
+        await writeFile(outputPath, 'video');
+      },
+      async () => {
+        throw missingExecutable;
+      },
+    ),
+    (error) => error.code === 'FFMPEG_NOT_INSTALLED',
+  );
+});
+
+test('rejects converted videos over the WhatsApp size limit', async () => {
+  await assert.rejects(
+    downloadSocialVideo(
+      'https://www.tiktok.com/@user/video/123',
+      async (_command, args) => {
+        const outputPath = args[args.indexOf('--output') + 1]
+          .replace('%(id)s.%(ext)s', '123.mp4');
+        await writeFile(outputPath, 'video');
+      },
+      async (_command, args) => {
+        await writeFile(args.at(-1), '');
+        await truncate(args.at(-1), 64 * 1024 * 1024 + 1);
+      },
+    ),
+    /Ukuran video melebihi batas pengiriman 64 MB/,
   );
 });
 

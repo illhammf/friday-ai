@@ -36,7 +36,9 @@ running Friday. Install them using your operating system's package manager or
 the projects' official installation instructions.
 For a Linux standalone binary, use the asset named `yt-dlp` from the official
 [yt-dlp releases](https://github.com/yt-dlp/yt-dlp/releases/latest), not the
-GitHub homepage URL.
+GitHub homepage URL. Friday converts downloaded videos to H.264/AAC MP4 before
+sending them so formats such as TikTok HEVC videos are compatible with
+WhatsApp Web.
 
 Run `npm run doctor` to check the Node.js version, whether `GEMINI_API_KEY` is
 configured (its value is never displayed), and whether `yt-dlp` and `ffmpeg`

@@ -515,9 +515,11 @@ client.on('message', async (message) => {
     try {
       if (asksToDownloadVideo && socialVideoUrls.length === 1) {
         let videoResult = null;
+        let videoStage = 'download';
 
         try {
           videoResult = await downloadSocialVideo(socialVideoUrls[0]);
+          videoStage = 'send';
           const videoMedia = MessageMedia.fromFilePath(videoResult.path);
 
           await client.sendMessage(message.from, videoMedia, {
@@ -530,13 +532,24 @@ client.on('message', async (message) => {
           const errorCode = error?.code;
 
           console.error(
-            '[Unduhan video gagal]',
-            inspect(error, { depth: 4, colors: false }),
+            videoStage === 'send'
+              ? '[Pengiriman video WhatsApp gagal]'
+              : '[Unduhan video gagal]',
+            videoStage === 'send'
+              ? {
+                  size: videoResult?.size ?? null,
+                  format: videoResult?.format ?? null,
+                  error: inspect(error, { depth: 4, colors: false }),
+                }
+              : inspect(error, { depth: 4, colors: false }),
           );
 
           let reply;
 
-          if (errorCode === 'YT_DLP_NOT_INSTALLED') {
+          if (videoStage === 'send') {
+            reply =
+              'Videonya berhasil diunduh, tetapi WhatsApp gagal mengirimnya. Coba kirim ulang sebentar lagi ya.';
+          } else if (errorCode === 'YT_DLP_NOT_INSTALLED') {
             reply =
               'Fitur unduh video belum siap di server Friday. Admin perlu memasang yt-dlp dan ffmpeg terlebih dahulu.';
           } else if (errorCode === 'FFMPEG_NOT_INSTALLED') {
@@ -545,6 +558,12 @@ client.on('message', async (message) => {
           } else if (errorCode === 'TIKTOK_REQUEST_BLOCKED') {
             reply =
               'TikTok sedang membatasi permintaan unduhan dari server Friday. Coba lagi beberapa saat lagi ya.';
+          } else if (
+            errorCode === 'VIDEO_TRANSCODE_FAILED' ||
+            errorCode === 'VIDEO_TRANSCODE_TIMEOUT'
+          ) {
+            reply =
+              'Video berhasil diambil, tetapi formatnya belum bisa disiapkan untuk WhatsApp. Coba lagi nanti atau kirim tautan lain ya.';
           } else if (/64 MB|too large|maximum file size/i.test(errorMessage)) {
             reply =
               'Video terlalu besar untuk dikirim lewat WhatsApp. Coba tautan video yang lebih pendek atau berukuran lebih kecil ya.';
@@ -557,7 +576,13 @@ client.on('message', async (message) => {
           }
 
           await message.reply(reply);
-          logEvent('error', 'Unduhan video gagal', errorCode || 'periksa log terminal');
+          logEvent(
+            'error',
+            videoStage === 'send'
+              ? 'Pengiriman video WhatsApp gagal'
+              : 'Unduhan video gagal',
+            errorCode || 'periksa log terminal',
+          );
         } finally {
           if (videoResult?.cleanup) {
             await videoResult.cleanup();
