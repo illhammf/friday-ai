@@ -54,10 +54,16 @@ replies use the same formatter.
 Messages in each WhatsApp chat are processed in order. Friday can keep up to
 three additional messages waiting while one is being handled; when that queue
 is full, Friday asks the sender to retry instead of silently dropping a
-message. Unaddressed group messages are ignored without entering the queue.
+message. Repeated WhatsApp delivery events for the same message ID are ignored
+for up to 24 hours, with a bounded in-memory cache. Unaddressed group messages
+are ignored without entering the queue.
 On shutdown, Friday stops accepting new messages, drains the current queue,
 then closes WhatsApp and the local database. Both Ctrl+C and SIGTERM use the
 same cleanup sequence.
+
+If an AI or media feature is unavailable, Friday replies with a short
+explanation and a reasonable next step. Provider errors, stack traces, and
+configuration details stay in the terminal logs rather than WhatsApp replies.
 
 ## User-controlled memory
 

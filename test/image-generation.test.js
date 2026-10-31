@@ -223,3 +223,18 @@ test('does not retry exhausted Gemini image quotas', async () => {
   );
   assert.doesNotMatch(getImageGenerationFailureMessage(quotaError), /Google AI Studio|Free Tier|https?:\/\//);
 });
+
+test('explains unavailable image service and config failures without technical details', () => {
+  const busy = getImageGenerationFailureMessage({
+    status: 503,
+    message: 'UNAVAILABLE internal-service-name',
+  });
+  const config = getImageGenerationFailureMessage({
+    status: 403,
+    message: 'API key rejected by provider-secret-endpoint',
+  });
+
+  assert.match(busy, /Layanan gambar sedang sibuk/);
+  assert.match(config, /Fitur gambar Friday sedang tidak tersedia/);
+  assert.doesNotMatch(`${busy} ${config}`, /UNAVAILABLE|provider-secret-endpoint|API key/i);
+});

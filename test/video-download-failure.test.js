@@ -46,6 +46,10 @@ test('distinguishes sending and conversion failures from download failures', () 
     getVideoDownloadFailureMessage(new Error('send failed'), 'send'),
     /berhasil diunduh, tetapi WhatsApp gagal mengirimnya/,
   );
+  assert.doesNotMatch(
+    getVideoDownloadFailureMessage(new Error('send failed'), 'send'),
+    /stack|send failed|ffmpeg|token/i,
+  );
   assert.match(
     getVideoDownloadFailureMessage({ code: 'VIDEO_TRANSCODE_FAILED' }),
     /formatnya belum bisa disiapkan/,

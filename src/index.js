@@ -49,6 +49,8 @@ import {
 } from './whatsapp/image-sticker.js';
 import {
   createMessageQueue,
+  createMessageDeduplicator,
+  getMessageDeduplicationKey,
   isQueueableMessage,
 } from './whatsapp/message-queue.js';
 import { createShutdownHandler } from './whatsapp/shutdown.js';
@@ -56,6 +58,7 @@ import {
   getRuntimeSummary,
   inspectRuntime,
 } from './config/runtime-diagnostics.js';
+import { getAiFailureMessage } from './ai/ai-failure-message.js';
 import whatsapp from 'whatsapp-web.js';
 import qrcode from 'qrcode-terminal';
 import { inspect } from 'node:util';
@@ -337,6 +340,7 @@ const client = new Client({
 // Untuk mencegah permintaan bersamaan dari chat yang sama, kita menggunakan Set untuk melacak chat aktif.
 const activeChats = new Set();
 const incomingMessageQueue = createMessageQueue({ maxPending: 3 });
+const incomingMessageDeduplicator = createMessageDeduplicator();
 let acceptingMessages = true;
 let fridayReadyAt = 0;
 
@@ -948,17 +952,6 @@ async function handleIncomingMessage(message) {
     }
       
     } catch (error) {
-        const errorMessage = String(error?.message || error);
-        const errorStatus = Number(error?.status || error?.code);
-
-        const isUnavailable =
-          errorStatus === 503 ||
-          /\b503\b|UNAVAILABLE|high demand|overloaded/i.test(errorMessage);
-
-        const isRateLimit =
-          errorStatus === 429 ||
-          /\b429\b|rate.?limit|quota exceeded/i.test(errorMessage);
-
         console.error(
           '\n========== DETAIL ERROR FRIDAY =========='
         );
@@ -972,18 +965,7 @@ async function handleIncomingMessage(message) {
           '=========================================\n'
         );
 
-        let fallbackMessage;
-
-        if (isUnavailable) {
-          fallbackMessage =
-            'Maaf, layanan AI Friday sedang ramai. Coba kirim pesan lagi dalam beberapa saat ya.';
-        } else if (isRateLimit) {
-          fallbackMessage =
-            'Maaf, batas penggunaan AI sedang tercapai. Coba lagi beberapa saat nanti ya.';
-        } else {
-          fallbackMessage =
-            'Maaf, Friday sedang mengalami kendala. Coba kirim pesan lagi nanti ya.';
-        }
+        const fallbackMessage = getAiFailureMessage(error);
 
         try {
           await message.reply(fallbackMessage);
@@ -1006,12 +988,20 @@ client.on('message', (message) => {
     return;
   }
 
+  const deduplicationKey = getMessageDeduplicationKey(message);
+
+  if (!incomingMessageDeduplicator.claim(deduplicationKey)) {
+    console.log('[Diabaikan] Event pesan WhatsApp duplikat.');
+    return;
+  }
+
   const queuedMessage = incomingMessageQueue.enqueue(
     message.from,
     () => handleIncomingMessage(message),
   );
 
   if (!queuedMessage) {
+    incomingMessageDeduplicator.release(deduplicationKey);
     void message.reply(
       'Aku masih memproses beberapa pesan di chat ini. Pesan baru ini belum masuk antrean, coba kirim lagi sebentar ya.',
     ).catch((error) => {

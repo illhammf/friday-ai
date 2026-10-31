@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  createMessageDeduplicator,
   createMessageQueue,
+  getMessageDeduplicationKey,
   isQueueableMessage,
 } from '../src/whatsapp/message-queue.js';
 
@@ -131,4 +133,61 @@ test('only queues supported private messages and Friday-addressed group messages
     ),
     false,
   );
+});
+
+test('deduplicates message IDs per chat and allows distinct messages', () => {
+  const deduplicator = createMessageDeduplicator();
+  const firstKey = getMessageDeduplicationKey({
+    from: '123@c.us',
+    id: { _serialized: 'false_123@c.us_ABC' },
+  });
+  const sameMessage = getMessageDeduplicationKey({
+    from: '123@c.us',
+    id: {
+      fromMe: false,
+      remote: '123@c.us',
+      id: 'ABC',
+    },
+  });
+  const otherChat = getMessageDeduplicationKey({
+    from: '456@c.us',
+    id: { _serialized: 'false_123@c.us_ABC' },
+  });
+
+  assert.equal(firstKey, sameMessage);
+  assert.equal(deduplicator.claim(firstKey), true);
+  assert.equal(deduplicator.claim(sameMessage), false);
+  assert.equal(deduplicator.claim(otherChat), true);
+});
+
+test('expires old deduplication keys and bounds retained state', () => {
+  let time = 0;
+  const expiring = createMessageDeduplicator({
+    ttlMs: 100,
+    maxEntries: 10,
+    now: () => time,
+  });
+  assert.equal(expiring.claim('expires'), true);
+  time = 101;
+  assert.equal(expiring.claim('expires'), true);
+
+  time = 0;
+  const deduplicator = createMessageDeduplicator({
+    ttlMs: 100,
+    maxEntries: 2,
+    now: () => time,
+  });
+
+  assert.equal(deduplicator.claim('first'), true);
+  assert.equal(deduplicator.claim('second'), true);
+  assert.equal(deduplicator.claim('third'), true);
+  assert.equal(deduplicator.claim('first'), true);
+  assert.equal(deduplicator.claim('second'), true);
+});
+
+test('releases message IDs when the queue refuses the message', () => {
+  const deduplicator = createMessageDeduplicator();
+  assert.equal(deduplicator.claim('message-1'), true);
+  deduplicator.release('message-1');
+  assert.equal(deduplicator.claim('message-1'), true);
 });

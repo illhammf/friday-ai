@@ -146,7 +146,24 @@ export function getImageGenerationQuotaDiagnostic(error, model = IMAGE_MODEL) {
 
 export function getImageGenerationFailureMessage(error) {
   if (!isImageGenerationQuotaError(error)) {
-    return 'Maaf, gambar belum berhasil dibuat. Coba ubah deskripsinya atau coba lagi beberapa saat ya.';
+    const status = Number(error?.status || error?.code);
+    const details = getErrorText(error);
+
+    if (
+      [500, 502, 503, 504].includes(status) ||
+      /UNAVAILABLE|high demand|overloaded|temporarily unavailable/i.test(details)
+    ) {
+      return 'Layanan gambar sedang sibuk atau sementara tidak tersedia. Coba lagi nanti ya.';
+    }
+
+    if (
+      [401, 403].includes(status) ||
+      /invalid api key|api key not valid|permission denied|unauthorized/i.test(details)
+    ) {
+      return 'Fitur gambar Friday sedang tidak tersedia saat ini. Tim pengelola perlu memeriksa layanan.';
+    }
+
+    return 'Maaf, gambar belum berhasil dibuat. Layanan gambar mungkin sedang mengalami kendala. Coba lagi nanti ya.';
   }
 
   return 'Maaf, aku belum bisa membuat gambar sekarang karena layanan gambar sedang mencapai batas penggunaan. Coba lagi nanti ya.';
