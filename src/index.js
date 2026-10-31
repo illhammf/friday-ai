@@ -28,6 +28,7 @@ import {
   getSocialVideoUrls,
 } from './video/download-social-video.js';
 import { isSocialVideoDownloadRequest } from './video/video-download-request.js';
+import { getVideoDownloadFailureMessage } from './video/video-download-failure.js';
 import { downloadMediaWithRetry } from './whatsapp/download-media.js';
 import {
   getRuntimeSummary,
@@ -226,7 +227,7 @@ function logDivider() {
       },
     ];
 
-    const conversationStyle = detectConversationStyle(question);
+    const conversationStyle = detectConversationStyle(question, history);
     const dynamicStyle = getStyleInstruction(conversationStyle);
 
     const aiStart = Date.now();
@@ -528,7 +529,6 @@ client.on('message', async (message) => {
 
           logEvent('success', 'Video berhasil diunduh dan dikirim', 'WhatsApp');
         } catch (error) {
-          const errorMessage = String(error?.message || error);
           const errorCode = error?.code;
 
           console.error(
@@ -544,38 +544,9 @@ client.on('message', async (message) => {
               : inspect(error, { depth: 4, colors: false }),
           );
 
-          let reply;
-
-          if (videoStage === 'send') {
-            reply =
-              'Videonya berhasil diunduh, tetapi WhatsApp gagal mengirimnya. Coba kirim ulang sebentar lagi ya.';
-          } else if (errorCode === 'YT_DLP_NOT_INSTALLED') {
-            reply =
-              'Fitur unduh video belum siap di server Friday. Admin perlu memasang yt-dlp dan ffmpeg terlebih dahulu.';
-          } else if (errorCode === 'FFMPEG_NOT_INSTALLED') {
-            reply =
-              'Fitur unduh video belum siap di server Friday. Admin perlu memasang ffmpeg terlebih dahulu.';
-          } else if (errorCode === 'TIKTOK_REQUEST_BLOCKED') {
-            reply =
-              'TikTok sedang membatasi permintaan unduhan dari server Friday. Coba lagi beberapa saat lagi ya.';
-          } else if (
-            errorCode === 'VIDEO_TRANSCODE_FAILED' ||
-            errorCode === 'VIDEO_TRANSCODE_TIMEOUT'
-          ) {
-            reply =
-              'Video berhasil diambil, tetapi formatnya belum bisa disiapkan untuk WhatsApp. Coba lagi nanti atau kirim tautan lain ya.';
-          } else if (/64 MB|too large|maximum file size/i.test(errorMessage)) {
-            reply =
-              'Video terlalu besar untuk dikirim lewat WhatsApp. Coba tautan video yang lebih pendek atau berukuran lebih kecil ya.';
-          } else if (error?.killed || error?.signal === 'SIGTERM') {
-            reply =
-              'Proses unduh video terlalu lama dan dihentikan. Coba lagi nanti atau gunakan tautan lain ya.';
-          } else {
-            reply =
-              'Video belum berhasil diunduh. Pastikan tautannya publik dan videonya bisa diakses, lalu coba lagi ya.';
-          }
-
-          await message.reply(reply);
+          await message.reply(
+            getVideoDownloadFailureMessage(error, videoStage),
+          );
           logEvent(
             'error',
             videoStage === 'send'

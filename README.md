@@ -31,6 +31,15 @@ user-agent used when requesting social videos.
   content, and content protected by access restrictions are not supported.
   Only download content you are authorized to use.
 
+## Conversation style
+
+Friday adapts its reply tone to the user's message and recent chat context.
+Explicit requests such as "coba bercanda", "balas romantis", or "jawab dengan
+tegas" take priority over the default tone. Humor stays light, romance is
+wordplay rather than a claim of a real relationship, and an angry/firm tone
+must not become insults or threats. Style changes the delivery, not accuracy
+or safety.
+
 Video downloads require `yt-dlp` and `ffmpeg` to be installed on the machine
 running Friday. Install them using your operating system's package manager or
 the projects' official installation instructions.
@@ -38,7 +47,10 @@ For a Linux standalone binary, use the asset named `yt-dlp` from the official
 [yt-dlp releases](https://github.com/yt-dlp/yt-dlp/releases/latest), not the
 GitHub homepage URL. Friday converts downloaded videos to H.264/AAC MP4 before
 sending them so formats such as TikTok HEVC videos are compatible with
-WhatsApp Web.
+WhatsApp Web. If a download fails, WhatsApp receives a concise explanation
+for common causes such as temporary platform limits, login-only videos,
+network failures, or file-size limits; internal diagnostics remain in the
+Friday terminal.
 
 Run `npm run doctor` to check the Node.js version, whether `GEMINI_API_KEY` is
 configured (its value is never displayed), and whether `yt-dlp` and `ffmpeg`
