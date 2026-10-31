@@ -57,3 +57,24 @@ test('does not make missing optional media tools block core readiness', () => {
   assert.equal(summary.ok, false);
   assert.equal(summary.requiredFailed.length, 0);
 });
+
+test('gives actionable guidance when yt-dlp exists but cannot execute', async () => {
+  const results = await inspectRuntime({
+    env: { GEMINI_API_KEY: 'configured' },
+    nodeVersion: 'v24.1.0',
+    runCommand: async (_command, _args, label, guidance) => ({
+      label,
+      ok: false,
+      required: false,
+      detail: 'file ditemukan tetapi bukan executable yt-dlp yang valid',
+      guidance: label === 'yt-dlp'
+        ? 'Unduh binary Linux resmi dari https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp lalu pastikan file dapat dijalankan.'
+        : guidance,
+    }),
+  });
+  const ytDlp = results.find((result) => result.label === 'yt-dlp');
+
+  assert.equal(ytDlp.ok, false);
+  assert.match(ytDlp.detail, /bukan executable/);
+  assert.match(ytDlp.guidance, /releases\/latest\/download\/yt-dlp/);
+});

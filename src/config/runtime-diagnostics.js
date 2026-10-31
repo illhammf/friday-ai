@@ -23,16 +23,25 @@ async function checkCommand(command, args, label, guidance) {
       guidance: '',
     };
   } catch (error) {
+    const invalidExecutable =
+      error?.code === 'ENOEXEC' ||
+      error?.code === 2 ||
+      /exec format|not executable/i.test(error?.message || '');
+
     return {
       label,
       ok: false,
       required: false,
       detail: error?.code === 'ENOENT'
         ? 'tidak ditemukan di PATH'
+        : invalidExecutable
+          ? 'file ditemukan tetapi bukan executable yt-dlp yang valid'
         : error?.killed
           ? 'pemeriksaan timeout'
           : `gagal diperiksa (${error?.code || error?.message || 'unknown'})`,
-      guidance,
+      guidance: label === 'yt-dlp' && invalidExecutable
+        ? 'Unduh binary Linux resmi dari https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp lalu pastikan file dapat dijalankan.'
+        : guidance,
     };
   }
 }
@@ -67,7 +76,7 @@ export async function inspectRuntime({
       env.YT_DLP_PATH || 'yt-dlp',
       ['--version'],
       'yt-dlp',
-      'Pasang yt-dlp atau atur YT_DLP_PATH untuk fitur unduh TikTok/Reels.',
+      'Pasang yt-dlp dari https://github.com/yt-dlp/yt-dlp/releases/latest atau atur YT_DLP_PATH untuk fitur unduh TikTok/Reels.',
     ),
     runCommand(
       env.FFMPEG_PATH || 'ffmpeg',

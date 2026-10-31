@@ -33,6 +33,9 @@ available on `PATH`.
 Video downloads require `yt-dlp` and `ffmpeg` to be installed on the machine
 running Friday. Install them using your operating system's package manager or
 the projects' official installation instructions.
+For a Linux standalone binary, use the asset named `yt-dlp` from the official
+[yt-dlp releases](https://github.com/yt-dlp/yt-dlp/releases/latest), not the
+GitHub homepage URL.
 
 Run `npm run doctor` to check the Node.js version, whether `GEMINI_API_KEY` is
 configured (its value is never displayed), and whether `yt-dlp` and `ffmpeg`
