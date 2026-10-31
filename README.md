@@ -51,6 +51,11 @@ blockquotes are flattened, lists are normalized, tables become bullets, and
 code blocks remain copyable. Text, image captions, and Voice Note fallback
 replies use the same formatter.
 
+Messages in each WhatsApp chat are processed in order. Friday can keep up to
+three additional messages waiting while one is being handled; when that queue
+is full, Friday asks the sender to retry instead of silently dropping a
+message. Unaddressed group messages are ignored without entering the queue.
+
 ## User-controlled memory
 
 Friday only saves a memory when a user explicitly asks in a private chat, for

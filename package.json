@@ -10,7 +10,7 @@
     "dev": "node --watch src/index.js",
     "check": "node --check src/index.js",
     "doctor": "node scripts/doctor.js",
-    "test": "node --test test/social-video.test.js test/video-download-failure.test.js test/conversation-style.test.js test/format-message.test.js test/image-sticker.test.js test/user-memory.test.js test/image-generation.test.js test/download-media.test.js test/voice-note-failure.test.js test/runtime-diagnostics.test.js"
+    "test": "node --test test/social-video.test.js test/video-download-failure.test.js test/conversation-style.test.js test/format-message.test.js test/image-sticker.test.js test/user-memory.test.js test/image-generation.test.js test/download-media.test.js test/voice-note-failure.test.js test/runtime-diagnostics.test.js test/message-queue.test.js"
   },
   "keywords": [
     "friday-ai",

@@ -48,6 +48,10 @@ import {
   readImageStickerData,
 } from './whatsapp/image-sticker.js';
 import {
+  createMessageQueue,
+  isQueueableMessage,
+} from './whatsapp/message-queue.js';
+import {
   getRuntimeSummary,
   inspectRuntime,
 } from './config/runtime-diagnostics.js';
@@ -331,6 +335,7 @@ const client = new Client({
 
 // Untuk mencegah permintaan bersamaan dari chat yang sama, kita menggunakan Set untuk melacak chat aktif.
 const activeChats = new Set();
+const incomingMessageQueue = createMessageQueue({ maxPending: 3 });
 let fridayReadyAt = 0;
 
 client.on('qr', (qr) => {
@@ -395,7 +400,7 @@ async function logRuntimeDiagnostics() {
 }
 
 
-client.on('message', async (message) => {
+async function handleIncomingMessage(message) {
   
     if (message.fromMe) return;
 
@@ -988,6 +993,36 @@ client.on('message', async (message) => {
           );
         }
   }
+}
+
+client.on('message', (message) => {
+  if (!isQueueableMessage(message, BOT_NAME)) {
+    return;
+  }
+
+  const queuedMessage = incomingMessageQueue.enqueue(
+    message.from,
+    () => handleIncomingMessage(message),
+  );
+
+  if (!queuedMessage) {
+    void message.reply(
+      'Aku masih memproses beberapa pesan di chat ini. Pesan baru ini belum masuk antrean, coba kirim lagi sebentar ya.',
+    ).catch((error) => {
+      console.error(
+        '[Pemberitahuan antrean penuh gagal]',
+        error?.message || error,
+      );
+    });
+    return;
+  }
+
+  queuedMessage.catch((error) => {
+    console.error(
+      '[Pemrosesan pesan antrean gagal]',
+      inspect(error, { depth: 4, colors: false }),
+    );
+  });
 });
 
 process.on('SIGINT', () => {
