@@ -55,6 +55,9 @@ Messages in each WhatsApp chat are processed in order. Friday can keep up to
 three additional messages waiting while one is being handled; when that queue
 is full, Friday asks the sender to retry instead of silently dropping a
 message. Unaddressed group messages are ignored without entering the queue.
+On shutdown, Friday stops accepting new messages, drains the current queue,
+then closes WhatsApp and the local database. Both Ctrl+C and SIGTERM use the
+same cleanup sequence.
 
 ## User-controlled memory
 

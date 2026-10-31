@@ -51,6 +51,7 @@ import {
   createMessageQueue,
   isQueueableMessage,
 } from './whatsapp/message-queue.js';
+import { createShutdownHandler } from './whatsapp/shutdown.js';
 import {
   getRuntimeSummary,
   inspectRuntime,
@@ -336,6 +337,7 @@ const client = new Client({
 // Untuk mencegah permintaan bersamaan dari chat yang sama, kita menggunakan Set untuk melacak chat aktif.
 const activeChats = new Set();
 const incomingMessageQueue = createMessageQueue({ maxPending: 3 });
+let acceptingMessages = true;
 let fridayReadyAt = 0;
 
 client.on('qr', (qr) => {
@@ -996,6 +998,10 @@ async function handleIncomingMessage(message) {
 }
 
 client.on('message', (message) => {
+  if (!acceptingMessages) {
+    return;
+  }
+
   if (!isQueueableMessage(message, BOT_NAME)) {
     return;
   }
@@ -1025,16 +1031,18 @@ client.on('message', (message) => {
   });
 });
 
-process.on('SIGINT', () => {
-  console.log('\nMenutup FRIDAY...');
-
-  client.destroy()
-    .catch(() => {})
-    .finally(() => {
-      closeDatabase();
-      process.exit(0);
-    });
+const shutdown = createShutdownHandler({
+  drainMessages: () => incomingMessageQueue.drain(),
+  destroyClient: () => client.destroy(),
+  closeResources: () => closeDatabase(),
 });
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    acceptingMessages = false;
+    void shutdown(signal);
+  });
+}
 
 printBanner();
 

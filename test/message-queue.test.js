@@ -69,6 +69,25 @@ test('processes separate chats independently', async () => {
   await first;
 });
 
+test('drain waits for queued work across chats', async () => {
+  const queue = createMessageQueue();
+  const gate = createDeferred();
+  const first = queue.enqueue('chat-1', () => gate.promise);
+  const second = queue.enqueue('chat-2', async () => 'done');
+  let drained = false;
+  const draining = queue.drain().then(() => {
+    drained = true;
+  });
+
+  await second;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(drained, false);
+
+  gate.resolve();
+  await Promise.all([first, draining]);
+  assert.equal(drained, true);
+});
+
 test('only queues supported private messages and Friday-addressed group messages', () => {
   assert.equal(
     isQueueableMessage(

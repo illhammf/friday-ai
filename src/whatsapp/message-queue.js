@@ -21,6 +21,11 @@ export function createMessageQueue({ maxPending = 3 } = {}) {
       queues.set(key, current);
       return result;
     },
+    async drain() {
+      while (queues.size > 0) {
+        await Promise.all([...queues.values()].map(({ tail }) => tail));
+      }
+    },
   };
 }
 
