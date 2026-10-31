@@ -179,6 +179,37 @@ test('retries temporary image API failures and propagates permanent errors', asy
   );
 });
 
+test('falls back through configured image models when quota is exhausted', async () => {
+  const attempts = [];
+  const image = await generateImage(
+    'Gambar burung',
+    async ({ model }) => {
+      attempts.push(model);
+      if (model === 'image-main') {
+        const error = new Error('RESOURCE_EXHAUSTED');
+        error.status = 429;
+        throw error;
+      }
+      return {
+        candidates: [{
+          content: {
+            parts: [{
+              inlineData: { mimeType: 'image/png', data: 'aW1hZ2U=' },
+            }],
+          },
+        }],
+      };
+    },
+    {
+      models: ['image-main', 'image-backup'],
+      onFallback() {},
+    },
+  );
+
+  assert.deepEqual(attempts, ['image-main', 'image-backup']);
+  assert.equal(image.mimeType, 'image/png');
+});
+
 test('does not retry exhausted Gemini image quotas', async () => {
   let attempts = 0;
   const quotaError = new Error(JSON.stringify({

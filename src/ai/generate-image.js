@@ -1,7 +1,15 @@
 import { ai } from './gemini.js';
+import {
+  generateWithModelFallback,
+  getModelChain,
+} from './model-fallback.js';
 
 export const IMAGE_MODEL =
   process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image';
+const IMAGE_MODELS = getModelChain(
+  IMAGE_MODEL,
+  process.env.GEMINI_IMAGE_FALLBACK_MODELS,
+);
 
 const SUPPORTED_IMAGE_TYPES = new Set([
   'image/jpeg',
@@ -221,6 +229,14 @@ export function extractGeneratedImage(response) {
 export async function generateImage(
   prompt,
   generateContent = (params) => ai.models.generateContent(params),
+  {
+    models = IMAGE_MODELS,
+    onFallback = ({ model, nextModel, error }) => {
+      console.warn(
+        `[Gemini Image] Model ${model} gagal (${error?.status || error?.code || 'sementara'}). Beralih ke ${nextModel}.`,
+      );
+    },
+  } = {},
 ) {
   const normalizedPrompt = String(prompt || '').trim();
 
@@ -228,26 +244,32 @@ export async function generateImage(
     throw new Error('Deskripsi gambar tidak boleh kosong.');
   }
 
-  let response;
+  return generateWithModelFallback(
+    models,
+    async (model) => {
+      let response;
 
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    try {
-      response = await generateContent({
-        model: IMAGE_MODEL,
-        contents: normalizedPrompt,
-        config: {
-          responseModalities: ['TEXT', 'IMAGE'],
-        },
-      });
-      break;
-    } catch (error) {
-      if (!isTemporaryGeminiError(error) || attempt === MAX_ATTEMPTS) {
-        throw error;
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          response = await generateContent({
+            model,
+            contents: normalizedPrompt,
+            config: {
+              responseModalities: ['TEXT', 'IMAGE'],
+            },
+          });
+          break;
+        } catch (error) {
+          if (!isTemporaryGeminiError(error) || attempt === MAX_ATTEMPTS) {
+            throw error;
+          }
+
+          await sleep(RETRY_DELAY_MS);
+        }
       }
 
-      await sleep(RETRY_DELAY_MS);
-    }
-  }
-
-  return extractGeneratedImage(response);
+      return extractGeneratedImage(response);
+    },
+    { onFallback },
+  );
 }

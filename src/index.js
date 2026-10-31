@@ -59,6 +59,10 @@ import {
   inspectRuntime,
 } from './config/runtime-diagnostics.js';
 import { getAiFailureMessage } from './ai/ai-failure-message.js';
+import {
+  generateWithModelFallback,
+  getModelChain,
+} from './ai/model-fallback.js';
 import whatsapp from 'whatsapp-web.js';
 import qrcode from 'qrcode-terminal';
 import { inspect } from 'node:util';
@@ -68,8 +72,11 @@ const { Client, LocalAuth, MessageMedia } = whatsapp;
 
 const BOT_NAME = process.env.BOT_NAME || 'Friday';
 const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
-
-const FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || '';
+const MODELS = getModelChain(
+  MODEL,
+  process.env.GEMINI_FALLBACK_MODELS,
+  process.env.GEMINI_FALLBACK_MODEL,
+);
 
 const sleep = (ms) =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -81,6 +88,18 @@ function isTemporaryGeminiError(error) {
   return (
     [429, 500, 502, 503, 504].includes(status) ||
     /\b429\b|\b503\b|UNAVAILABLE|high demand|rate.?limit|quota exceeded|overloaded|temporarily unavailable/i.test(message)
+  );
+}
+
+function isGeminiQuotaError(error) {
+  const status = Number(error?.status || error?.code);
+  const message = String(error?.message || error);
+
+  return (
+    status === 429 ||
+    /RESOURCE_EXHAUSTED|quota exceeded|exceeded your current quota|rate.?limit/i.test(
+      message,
+    )
   );
 }
 
@@ -98,6 +117,10 @@ async function generateWithRetry(model, contents, config) {
       });
     } catch (error) {
       if (!isTemporaryGeminiError(error) || attempt === maxAttempts) {
+        throw error;
+      }
+
+      if (isGeminiQuotaError(error)) {
         throw error;
       }
 
@@ -269,27 +292,17 @@ function logDivider() {
 
     let response;
 
-    try {
-      response = await generateWithRetry(MODEL, contents, config);
-    } catch (primaryError) {
-      if (
-        !FALLBACK_MODEL ||
-        FALLBACK_MODEL === MODEL ||
-        !isTemporaryGeminiError(primaryError)
-      ) {
-        throw primaryError;
-      }
-
-      console.warn(
-        `[Gemini] Model utama gagal sementara. Beralih ke ${FALLBACK_MODEL}.`
-      );
-
-      response = await generateWithRetry(
-        FALLBACK_MODEL,
-        contents,
-        config
-      );
-    }
+    response = await generateWithModelFallback(
+      MODELS,
+      (model) => generateWithRetry(model, contents, config),
+      {
+        onFallback: ({ model, nextModel, error }) => {
+          console.warn(
+            `[Gemini] Model ${model} gagal (${error?.status || error?.code || 'sementara'}). Beralih ke ${nextModel}.`,
+          );
+        },
+      },
+    );
 
     // Catat waktu respons dan penggunaan token.
     const elapsedSeconds = (
