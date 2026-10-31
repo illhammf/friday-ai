@@ -2,6 +2,10 @@
 export {
   saveMessage,
   loadHistory,
+  saveUserMemory,
+  loadUserMemories,
+  deleteUserMemory,
+  clearUserMemories,
   privateSessionId,
   groupSessionId,
   closeDatabase,

@@ -9,6 +9,10 @@ import { transcribeVoiceNote } from './audio/transcribe-voice-note.js';
 import {
   saveMessage,
   loadHistory,
+  saveUserMemory,
+  loadUserMemories,
+  deleteUserMemory,
+  clearUserMemories,
   privateSessionId,
   groupSessionId,
   closeDatabase,
@@ -31,6 +35,11 @@ import { isSocialVideoDownloadRequest } from './video/video-download-request.js'
 import { getVideoDownloadFailureMessage } from './video/video-download-failure.js';
 import { formatWhatsAppMessage } from './whatsapp/format-message.js';
 import { downloadMediaWithRetry } from './whatsapp/download-media.js';
+import {
+  handleMemoryCommand,
+  getMemoryInstruction,
+  parseMemoryCommand,
+} from './ai/user-memory.js';
 import {
   createImageSticker,
   getImageStickerFailureMessage,
@@ -206,6 +215,7 @@ function logDivider() {
       : privateSession;
 
     const history = loadHistory(activeSession, 10);
+    const userMemories = isGroup ? [] : loadUserMemories(privateSession);
 
     // Identitas pengirim hanya ditambahkan pada pesan grup.
     const userMessage = isGroup
@@ -244,6 +254,7 @@ function logDivider() {
       systemInstruction: [
         systemInstruction,
         dynamicStyle,
+        getMemoryInstruction(userMemories),
       ].filter(Boolean).join('\n\n'),
     };
 
@@ -507,6 +518,46 @@ client.on('message', async (message) => {
     const senderName = isGroup
       ? (message._data?.notifyName || 'Anggota grup')
       : 'Pengguna';
+
+    const memoryCommand = parseMemoryCommand(question);
+
+    if (memoryCommand && !isImage && !isVoiceNote) {
+      if (isGroup) {
+        await message.reply(
+          'Memori Friday hanya tersedia di chat pribadi dan tidak disimpan dari grup. Kirim perintah memori langsung ke chat pribadi Friday, ya.',
+        );
+        return;
+      }
+
+      try {
+        const reply = await handleMemoryCommand(question, privateSession, {
+          add: saveUserMemory,
+          list: loadUserMemories,
+          delete: deleteUserMemory,
+          clear: clearUserMemories,
+        });
+
+        if (reply) {
+          await message.reply(formatWhatsAppMessage(reply));
+          logEvent('success', 'Perintah memori diproses', memoryCommand.action);
+        }
+      } catch (error) {
+        console.error(
+          '[Perintah memori gagal]',
+          inspect(error, { depth: 4, colors: false }),
+        );
+        await message.reply(
+          'Memorimu belum berhasil diproses. Coba lagi sebentar ya.',
+        );
+        logEvent(
+          'error',
+          'Perintah memori gagal',
+          error?.code || 'periksa log terminal',
+        );
+      }
+
+      return;
+    }
 
     // Cegah permintaan bersamaan dari sesi pengguna yang sama.
     const sessionId = privateSession;

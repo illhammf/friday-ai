@@ -48,6 +48,21 @@ blockquotes are flattened, lists are normalized, tables become bullets, and
 code blocks remain copyable. Text, image captions, and Voice Note fallback
 replies use the same formatter.
 
+## User-controlled memory
+
+Friday only saves a memory when a user explicitly asks in a private chat, for
+example: "Friday, ingat ya aku suka jawaban singkat." Memories are local to
+that WhatsApp account, are not loaded in group chats, and are stored in the
+local `data/friday.sqlite` database. The database is local application data,
+not an encrypted password vault; protect access to the machine and database
+file. Friday does not save passwords, PINs, one-time codes, API keys, or access
+tokens.
+
+- "Friday, ingat apa tentang aku?" lists saved memories.
+- "Friday, hapus memori 2" deletes one item by its displayed number.
+- "Friday, hapus semua memori" clears that private chat's memories.
+- "Friday, ingat ya ..." explicitly saves a new item.
+
 Video downloads require `yt-dlp` and `ffmpeg` to be installed on the machine
 running Friday. Install them using your operating system's package manager or
 the projects' official installation instructions.
