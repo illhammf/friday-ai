@@ -32,7 +32,7 @@ export function isImageStickerRequest(text) {
   const normalized = message.toLowerCase();
 
   if (
-    /\b(?:jangan|tidak|nggak|enggak|gak|ga|bukan)\b(?:\s+\w+){0,3}\s+(?:buat(?:kan)?|bikin(?:in)?|jadikan|ubah(?:kan)?|create|make|turn)\b/i.test(
+    /\b(?:jangan|tidak|nggak|enggak|gak|ga|bukan)\b(?:\s+\w+){0,3}\s+(?:buat(?:kan)?|bikin(?:in)?|jadi(?:kan|in)?|ubah(?:kan|in)?|stikerin|stickerize|create|make|turn)\b/i.test(
       normalized,
     ) ||
     /^(?:gimana|bagaimana|cara)\b/i.test(normalized)
@@ -40,8 +40,12 @@ export function isImageStickerRequest(text) {
     return false;
   }
 
-  return /\b(?:buat(?:kan)?|bikin(?:in)?|jadikan|ubah(?:kan)?|create|make|turn)\b[\s\S]{0,60}\b(?:stiker|sticker)\b|\b(?:stiker|sticker)\b[\s\S]{0,40}\b(?:dari|from)\b/i.test(
-    normalized,
+  return (
+    /\b(?:buat(?:kan)?|bikin(?:in)?|jadi(?:kan|in)?|ubah(?:kan|in)?|create|make|turn)\b[\s\S]{0,60}\b(?:stiker|sticker)\b/i.test(
+      normalized,
+    ) ||
+    /\b(?:stiker|sticker)\b[\s\S]{0,40}\b(?:dari|from)\b/i.test(normalized) ||
+    /\b(?:stikerin|stickerize)\b/i.test(normalized)
   );
 }
 

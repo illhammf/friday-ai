@@ -18,6 +18,11 @@ test('recognizes explicit sticker requests for attached images', () => {
   for (const request of [
     'Buatkan stiker dari foto ini',
     'Bikin stiker dong',
+    'Friday jadiin stiker coba',
+    'Jadiin stiker ya',
+    'Bikin foto ini jadi stiker',
+    'Tolong stikerin foto ini',
+    'Stikerin dong',
     'Ubah foto ini jadi sticker',
     'Jadikan gambar ini stiker ya',
     'Make a sticker from this photo',
@@ -31,6 +36,9 @@ test('does not mistake questions or negated requests for sticker creation', () =
   for (const request of [
     'Bagaimana cara membuat stiker dari foto?',
     'Jangan buat stiker dari foto ini',
+    'Jangan jadiin stiker ini',
+    'Tidak usah stikerin foto ini',
+    'Cara jadiin foto ini stiker gimana?',
     'Tolong jelaskan foto ini',
     'Buat gambar baru dari foto ini',
     '',
