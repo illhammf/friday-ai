@@ -20,8 +20,8 @@
     "nodejs",
     "wsl"
   ],
-  "author": "Ilham Firmansyah",
-  "license": "UNLICENSED",
+  "author": "Ilham Firmansyah (https://github.com/illhammf)",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/illhammf/friday-ai.git"

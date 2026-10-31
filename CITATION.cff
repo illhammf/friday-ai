@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: >-
+  If you use Friday AI in your work, please cite this repository.
+type: software
+title: Friday AI
+authors:
+  - family-names: Firmansyah
+    given-names: Ilham
+version: 1.0.0
+date-released: 2026-10-31
+license: MIT
+repository-code: 'https://github.com/illhammf/friday-ai'
+url: 'https://github.com/illhammf/friday-ai'
+abstract: >-
+  A personal WhatsApp AI assistant built with Node.js, WhatsApp Web, and
+  Google's Gemini API.

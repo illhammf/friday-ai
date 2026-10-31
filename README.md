@@ -5,8 +5,11 @@ unofficial `whatsapp-web.js` library, and Google's Gemini API. It can chat,
 understand photos and voice notes, create images and stickers, and download
 public TikTok or Instagram videos when explicitly asked.
 
-**Repository:** [github.com/illhammf/friday-ai](https://github.com/illhammf/friday-ai)  
+**Repository:** [github.com/illhammf/friday-ai](https://github.com/illhammf/friday-ai)
+
 **Maintainer:** [@illhammf](https://github.com/illhammf)
+
+**Author:** Ilham Firmansyah
 
 > **Project status:** Friday is a personal project and is provided as-is.
 > WhatsApp Web, Gemini model availability, platform access, and free quotas
@@ -387,10 +390,41 @@ Issues and pull requests are welcome. Before opening a pull request:
    tools.
 4. Include steps to reproduce behavior changes and tests where practical.
 
+## Author
+
+Friday AI is created and maintained by **Ilham Firmansyah**.
+
+- GitHub: [@illhammf](https://github.com/illhammf)
+- Repository: [illhammf/friday-ai](https://github.com/illhammf/friday-ai)
+- Issues and feature requests:
+  [GitHub Issues](https://github.com/illhammf/friday-ai/issues)
+
+## Citation
+
+GitHub reads the citation metadata from [`CITATION.cff`](./CITATION.cff). Use
+the following BibTeX entry when citing this software:
+
+```bibtex
+@software{firmansyah_friday_ai_2026,
+  author       = {Ilham Firmansyah},
+  title        = {{Friday AI}},
+  year         = {2026},
+  version      = {1.0.0},
+  url          = {https://github.com/illhammf/friday-ai},
+  license      = {MIT}
+}
+```
+
+There is currently no DOI. If a release or archive receives a DOI in the
+future, cite that DOI for a version-specific reference.
+
 ## License
 
-The repository currently declares `"license": "UNLICENSED"` in `package.json`
-and does not include an open-source license. Public visibility or the ability
-to clone the repository does not by itself grant permission to redistribute
-or reuse the code. Contact the maintainer about licensing before publishing
-derivative work.
+Friday AI is licensed under the [MIT License](./LICENSE). Copyright (c) 2026
+Ilham Firmansyah. The license permits use, modification, and redistribution
+subject to its terms, including retaining the copyright and permission notice.
+
+This license applies to Friday AI's project code and documentation. Third-party
+libraries, services, names, and trademarks remain subject to their own licenses
+and terms. In particular, Friday AI is an independent project and is not
+affiliated with or endorsed by WhatsApp/Meta or Google.
