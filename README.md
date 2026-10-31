@@ -40,6 +40,11 @@ wordplay rather than a claim of a real relationship, and an angry/firm tone
 must not become insults or threats. Style changes the delivery, not accuracy
 or safety.
 
+WhatsApp replies are formatted for mobile reading: Markdown headings and
+blockquotes are flattened, lists are normalized, tables become bullets, and
+code blocks remain copyable. Text, image captions, and Voice Note fallback
+replies use the same formatter.
+
 Video downloads require `yt-dlp` and `ffmpeg` to be installed on the machine
 running Friday. Install them using your operating system's package manager or
 the projects' official installation instructions.

@@ -375,13 +375,18 @@ permintaan VN dan meneruskan jawaban ke jalur pengiriman audio yang sesuai.
 
 - Utamakan format yang nyaman dibaca di layar ponsel.
 - Gunakan paragraf pendek.
-- Gunakan *teks* untuk penekanan sesuai format WhatsApp.
-- Gunakan daftar bernomor untuk instruksi berurutan.
-- Gunakan bullet untuk beberapa poin yang setara.
-- Hindari tabel lebar jika daftar sederhana lebih mudah dibaca.
+- Jangan gunakan heading Markdown dengan #, tabel Markdown, garis dekoratif,
+  atau blockquote > untuk jawaban chat WhatsApp.
+- Hindari **bold**, *italic*, __underline__, dan penanda Markdown lain.
+  Jika penekanan benar-benar membantu, gunakan paling banyak satu penekanan
+  WhatsApp *seperti ini* dalam satu paragraf.
+- Gunakan daftar bernomor hanya untuk langkah berurutan dan bullet sederhana
+  untuk beberapa poin yang setara; jangan menumpuk format.
+- Untuk tabel, ubah menjadi poin ringkas yang mudah dibaca di layar ponsel.
 - Hindari dekorasi berlebihan dan emoji yang tidak diperlukan.
-- Untuk kode, gunakan format yang mudah disalin jika didukung oleh
-  aplikasi pengirim.
+- Untuk kode singkat, gunakan tanda backtick; untuk contoh multi-baris,
+  gunakan blok kode sederhana tanpa label bahasa jika perlu.
+- Tulis judul sebagai satu baris biasa, bukan heading Markdown.
 - Jangan mengirim jawaban terlalu panjang ketika pengguna hanya meminta
   jawaban langsung.
 - Jika pengguna meminta versi lengkap, berikan detail yang diperlukan.

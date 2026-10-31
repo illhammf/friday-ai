@@ -29,6 +29,7 @@ import {
 } from './video/download-social-video.js';
 import { isSocialVideoDownloadRequest } from './video/video-download-request.js';
 import { getVideoDownloadFailureMessage } from './video/video-download-failure.js';
+import { formatWhatsAppMessage } from './whatsapp/format-message.js';
 import { downloadMediaWithRetry } from './whatsapp/download-media.js';
 import {
   getRuntimeSummary,
@@ -705,7 +706,9 @@ client.on('message', async (message) => {
           generatedImage.text || 'Ini gambar yang kamu minta.'
         ).slice(0, 1000);
 
-        await client.sendMessage(message.from, imageMedia, { caption });
+        await client.sendMessage(message.from, imageMedia, {
+          caption: formatWhatsAppMessage(caption),
+        });
 
         const activeSession = sharedGroupSession || privateSession;
         const userMessage = isGroup
@@ -794,7 +797,7 @@ client.on('message', async (message) => {
             const fallbackText = getVoiceNoteFailureMessage(error, answer);
 
             try {
-              await message.reply(fallbackText);
+              await message.reply(formatWhatsAppMessage(fallbackText));
 
               console.log(
                 '[Fallback] Penjelasan dan jawaban teks berhasil dikirim.'
@@ -823,7 +826,7 @@ client.on('message', async (message) => {
           }
         } else {
           // Permintaan biasa tetap mendapatkan jawaban teks.
-          await message.reply(answer);
+          await message.reply(formatWhatsAppMessage(answer));
 
           logEvent('success', 'Jawaban teks berhasil dikirim', 'WhatsApp');
         }
