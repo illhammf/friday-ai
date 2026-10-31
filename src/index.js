@@ -44,6 +44,7 @@ import {
   createImageSticker,
   getImageStickerFailureMessage,
   isImageStickerRequest,
+  parseImageStickerOptions,
   readImageStickerData,
 } from './whatsapp/image-sticker.js';
 import {
@@ -705,7 +706,8 @@ client.on('message', async (message) => {
           let stickerResult;
 
           try {
-            stickerResult = await createImageSticker(media);
+            const stickerOptions = parseImageStickerOptions(question);
+            stickerResult = await createImageSticker(media, stickerOptions);
             const stickerMedia = new MessageMedia(
               stickerResult.mimetype,
               await readImageStickerData(stickerResult.path),

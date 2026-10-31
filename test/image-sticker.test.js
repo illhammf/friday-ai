@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { access, writeFile } from 'node:fs/promises';
+import { access, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import {
   createImageSticker,
   getImageStickerFailureMessage,
   isImageStickerRequest,
+  parseImageStickerOptions,
   readImageStickerData,
 } from '../src/whatsapp/image-sticker.js';
 
@@ -47,6 +48,35 @@ test('does not mistake questions or negated requests for sticker creation', () =
   }
 });
 
+test('parses optional caption text and center-crop requests', () => {
+  assert.deepEqual(
+    parseImageStickerOptions(
+      'Friday jadiin stiker coba, kasih tulisan "Bestie" crop ya',
+    ),
+    { crop: 'cover', text: 'Bestie' },
+  );
+  assert.deepEqual(
+    parseImageStickerOptions('Buat stiker dengan teks: Lah kok?'),
+    { crop: 'contain', text: 'Lah kok?' },
+  );
+  assert.deepEqual(
+    parseImageStickerOptions('Buat stiker dengan tulisan Bestie'),
+    { crop: 'contain', text: 'Bestie' },
+  );
+  assert.deepEqual(
+    parseImageStickerOptions('Jadiin stiker, tulis Semangat ya'),
+    { crop: 'contain', text: 'Semangat' },
+  );
+  assert.deepEqual(
+    parseImageStickerOptions('Friday jadiin stiker crop'),
+    { crop: 'cover', text: null },
+  );
+  assert.deepEqual(
+    parseImageStickerOptions('Jadiin stiker aja'),
+    { crop: 'contain', text: null },
+  );
+});
+
 test('creates a compact WebP sticker and cleans temporary files', async () => {
   let temporaryDirectory;
   const result = await createImageSticker(sourceImage, {
@@ -62,6 +92,30 @@ test('creates a compact WebP sticker and cleans temporary files', async () => {
   assert.equal(result.mimetype, 'image/webp');
   assert.equal(result.size, 12);
   assert.equal(await readImageStickerData(result.path), 'd2VicC1zdGlja2Vy');
+  await result.cleanup();
+  await assert.rejects(access(temporaryDirectory));
+});
+
+test('adds safe caption overlay and center-crop filter when requested', async () => {
+  let temporaryDirectory;
+  const result = await createImageSticker(sourceImage, {
+    crop: 'cover',
+    text: 'Bestie & Friday',
+    runFfmpeg: async (_command, args) => {
+      const filter = args[args.indexOf('-vf') + 1];
+      temporaryDirectory = dirname(args.at(-1));
+      assert.match(filter, /force_original_aspect_ratio=increase/);
+      assert.match(filter, /crop=512:512/);
+      assert.match(filter, /drawtext=/);
+      assert.match(filter, /expansion=none/);
+      assert.match(filter, /boxcolor=black@0\.58/);
+      const textPath = filter.match(/textfile='([^']+)'/)[1];
+      assert.equal(await readFile(textPath, 'utf8'), 'Bestie & Friday');
+      await writeFile(args.at(-1), 'webp-sticker');
+    },
+  });
+
+  assert.equal(result.size, 12);
   await result.cleanup();
   await assert.rejects(access(temporaryDirectory));
 });
@@ -149,6 +203,22 @@ test('rejects unsupported, invalid, and oversized input before conversion', asyn
   assert.equal(conversionAttempts, 0);
 });
 
+test('rejects overlong sticker text before starting ffmpeg', async () => {
+  let conversionAttempts = 0;
+
+  await assert.rejects(
+    createImageSticker(sourceImage, {
+      text: 'long caption '.repeat(8),
+      runFfmpeg: async () => {
+        conversionAttempts++;
+      },
+    }),
+    (error) => error.code === 'STICKER_TEXT_TOO_LONG',
+  );
+
+  assert.equal(conversionAttempts, 0);
+});
+
 test('maps sticker errors to safe, actionable WhatsApp messages', () => {
   assert.match(
     getImageStickerFailureMessage({ code: 'STICKER_FFMPEG_MISSING' }),
@@ -157,6 +227,10 @@ test('maps sticker errors to safe, actionable WhatsApp messages', () => {
   assert.match(
     getImageStickerFailureMessage({ code: 'STICKER_OUTPUT_TOO_LARGE' }),
     /crop bagian utama/,
+  );
+  assert.match(
+    getImageStickerFailureMessage({ code: 'STICKER_TEXT_TOO_LONG' }),
+    /maksimal 80 karakter/,
   );
   assert.match(
     getImageStickerFailureMessage(new Error('internal stack trace')),

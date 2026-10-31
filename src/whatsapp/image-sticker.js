@@ -21,6 +21,9 @@ const ENCODING_ATTEMPTS = [
   { canvas: 320, quality: 42 },
   { canvas: 256, quality: 35 },
 ];
+const MAX_STICKER_TEXT_LENGTH = 80;
+const MAX_STICKER_TEXT_LINES = 5;
+const MAX_STICKER_TEXT_LINE_LENGTH = 18;
 
 export function isImageStickerRequest(text) {
   const message = String(text || '').trim();
@@ -49,6 +52,40 @@ export function isImageStickerRequest(text) {
   );
 }
 
+export function parseImageStickerOptions(text) {
+  const message = String(text || '');
+  const crop = /\b(?:crop|cropping|potong|zoom|fokus(?:kan)?|isi penuh)\b/i.test(
+    message,
+  );
+  const quotedText = message.match(
+    /\b(?:tulisan|teks|caption)\s*[:=]?\s*["“]([^"”\n]{1,80})["”]/i,
+  );
+  const labeledText = message.match(
+    /\b(?:tulisan|teks|caption)\s*[:=]\s*(.+)$/i,
+  );
+  const descriptiveText = message.match(
+    /\b(?:dengan|pakai|pake)\s+(?:tulisan|teks|caption)\s+(.+)$/i,
+  );
+  const actionText = message.match(
+    /\b(?:kasih|tambah(?:kan)?|tulis(?:kan)?)\s+(?:(?:tulisan|teks|caption)\s+)?(.+)$/i,
+  );
+  const rawText = quotedText?.[1]
+    || labeledText?.[1]
+    || descriptiveText?.[1]
+    || actionText?.[1]
+    || '';
+  const stickerText = rawText
+    .replace(/\b(?:crop|cropping|potong|zoom|fokus(?:kan)?|isi penuh)\b/gi, '')
+    .replace(/\b(?:ya|dong|deh|nih|coba|please)\b[.!?]*$/i, '')
+    .replace(/^[\s"'“”:=,-]+|[\s"'“”:=,-]+$/g, '')
+    .trim();
+
+  return {
+    crop: crop ? 'cover' : 'contain',
+    text: stickerText || null,
+  };
+}
+
 function createStickerError(code, message, cause) {
   const error = new Error(message, cause ? { cause } : undefined);
   error.code = code;
@@ -60,6 +97,8 @@ export async function createImageSticker(
   {
     runFfmpeg = execFileAsync,
     ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg',
+    text = null,
+    crop = 'contain',
   } = {},
 ) {
   const extension = SUPPORTED_IMAGE_TYPES.get(media?.mimetype);
@@ -94,17 +133,45 @@ export async function createImageSticker(
     );
   }
 
+  const stickerText = String(text || '')
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (Array.from(stickerText).length > MAX_STICKER_TEXT_LENGTH) {
+    throw createStickerError(
+      'STICKER_TEXT_TOO_LONG',
+      `Teks stiker melebihi ${MAX_STICKER_TEXT_LENGTH} karakter.`,
+    );
+  }
+
+  const cropMode = crop === 'cover' ? 'cover' : 'contain';
   const temporaryDirectory = await mkdtemp(join(tmpdir(), 'friday-sticker-'));
   const sourcePath = join(temporaryDirectory, `source.${extension}`);
   const stickerPath = join(temporaryDirectory, 'friday-sticker.webp');
+  const textPath = join(temporaryDirectory, 'sticker-caption.txt');
   let completed = false;
 
   try {
     await writeFile(sourcePath, imageData, { flag: 'wx' });
+    const wrappedText = stickerText
+      ? wrapStickerText(stickerText)
+      : '';
+
+    if (wrappedText) {
+      await writeFile(textPath, wrappedText, { flag: 'wx' });
+    }
 
     for (const { canvas, quality } of ENCODING_ATTEMPTS) {
       try {
         await rm(stickerPath, { force: true });
+        const fitFilter = cropMode === 'cover'
+          ? `scale=${canvas}:${canvas}:force_original_aspect_ratio=increase:force_divisible_by=2,crop=${canvas}:${canvas},setsar=1,format=yuva420p`
+          : `scale=${canvas}:${canvas}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${canvas}:${canvas}:(ow-iw)/2:(oh-ih)/2:color=0x00000000,format=yuva420p`;
+        const textFilter = wrappedText
+          ? `,drawtext=font='${process.env.FRIDAY_STICKER_FONT || 'DejaVu Sans'}':textfile='${textPath}':expansion=none:fontcolor=white:fontsize=h/12:borderw=2:bordercolor=black@0.9:box=1:boxcolor=black@0.58:boxborderw=12:line_spacing=6:x=(w-text_w)/2:y=h-text_h-12`
+          : '';
+
         await runFfmpeg(
           ffmpegPath,
           [
@@ -121,7 +188,7 @@ export async function createImageSticker(
             '1',
             '-an',
             '-vf',
-            `scale=${canvas}:${canvas}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${canvas}:${canvas}:(ow-iw)/2:(oh-ih)/2:color=0x00000000,format=yuva420p`,
+            `${fitFilter}${textFilter}`,
             '-c:v',
             'libwebp',
             '-lossless',
@@ -195,9 +262,53 @@ export function getImageStickerFailureMessage(error) {
       return 'Foto terlalu detail untuk batas ukuran stiker WhatsApp. Coba crop bagian utama atau kirim gambar yang lebih sederhana.';
     case 'STICKER_PROCESS_TIMEOUT':
       return 'Proses membuat stikernya terlalu lama. Coba kirim foto yang lebih kecil ya.';
+    case 'STICKER_TEXT_TOO_LONG':
+      return `Teks stikernya terlalu panjang. Pendekkan jadi maksimal ${MAX_STICKER_TEXT_LENGTH} karakter, ya.`;
     default:
       return 'Foto diterima, tetapi stikernya belum berhasil dibuat. Coba kirim ulang fotonya ya.';
   }
+}
+
+function wrapStickerText(text) {
+  const words = text.split(/\s+/);
+  const lines = [];
+  let line = '';
+
+  for (const word of words) {
+    const characters = Array.from(word);
+    const chunks = [];
+
+    while (characters.length > MAX_STICKER_TEXT_LINE_LENGTH) {
+      chunks.push(characters.splice(0, MAX_STICKER_TEXT_LINE_LENGTH).join(''));
+    }
+    if (characters.length) {
+      chunks.push(characters.join(''));
+    }
+
+    for (const chunk of chunks) {
+      const nextLine = line ? `${line} ${chunk}` : chunk;
+
+      if (Array.from(nextLine).length > MAX_STICKER_TEXT_LINE_LENGTH) {
+        lines.push(line);
+        line = chunk;
+      } else {
+        line = nextLine;
+      }
+    }
+  }
+
+  if (line) {
+    lines.push(line);
+  }
+
+  if (lines.length > MAX_STICKER_TEXT_LINES) {
+    throw createStickerError(
+      'STICKER_TEXT_TOO_LONG',
+      `Teks stiker melebihi ${MAX_STICKER_TEXT_LENGTH} karakter.`,
+    );
+  }
+
+  return lines.join('\n');
 }
 
 export async function readImageStickerData(stickerPath) {
