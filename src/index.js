@@ -32,6 +32,12 @@ import { getVideoDownloadFailureMessage } from './video/video-download-failure.j
 import { formatWhatsAppMessage } from './whatsapp/format-message.js';
 import { downloadMediaWithRetry } from './whatsapp/download-media.js';
 import {
+  createImageSticker,
+  getImageStickerFailureMessage,
+  isImageStickerRequest,
+  readImageStickerData,
+} from './whatsapp/image-sticker.js';
+import {
   getRuntimeSummary,
   inspectRuntime,
 } from './config/runtime-diagnostics.js';
@@ -641,6 +647,52 @@ client.on('message', async (message) => {
 
         if (!media.mimetype?.startsWith('image/')) {
           await message.reply('File yang diterima bukan gambar yang didukung.');
+          return;
+        }
+
+        if (isImageStickerRequest(question)) {
+          let stickerResult;
+
+          try {
+            stickerResult = await createImageSticker(media);
+            const stickerMedia = new MessageMedia(
+              stickerResult.mimetype,
+              await readImageStickerData(stickerResult.path),
+              'friday-sticker.webp',
+              stickerResult.size,
+            );
+
+            await client.sendMessage(message.from, stickerMedia, {
+              sendMediaAsSticker: true,
+              stickerName: BOT_NAME,
+              stickerAuthor: 'Friday AI',
+            });
+
+            const stickerSession = sharedGroupSession || privateSession;
+            const userMessage = isGroup
+              ? `${senderName}: ${question}`
+              : question;
+
+            saveMessage(stickerSession, 'user', userMessage);
+            saveMessage(stickerSession, 'model', 'Stiker berhasil dibuat dan dikirim.');
+            logEvent('success', 'Stiker berhasil dibuat dan dikirim', 'WhatsApp');
+          } catch (error) {
+            console.error(
+              '[Pembuatan stiker gagal]',
+              inspect(error, { depth: 4, colors: false }),
+            );
+            await message.reply(getImageStickerFailureMessage(error));
+            logEvent(
+              'error',
+              'Pembuatan atau pengiriman stiker gagal',
+              error?.code || 'periksa log terminal',
+            );
+          } finally {
+            if (stickerResult?.cleanup) {
+              await stickerResult.cleanup();
+            }
+          }
+
           return;
         }
 

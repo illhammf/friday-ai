@@ -18,6 +18,9 @@ user-agent used when requesting social videos.
 
 - Send a photo in WhatsApp to have Friday describe it. A caption or question
   sent with the photo is included in the request.
+- Send a photo with a request such as "buatkan stiker dari foto ini" to get a
+  WhatsApp sticker. Static stickers are converted to WebP, fitted within a
+  512-pixel canvas, and compressed to WhatsApp's 100 KB sticker limit.
 - Ask Friday to make an image, for example: "Buatkan gambar kucing astronot".
   Requests such as "bikin foto pemandangan pantai" and "generate an image of a
   cabin in the snow" are also supported, as are short prompts such as
