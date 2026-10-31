@@ -79,6 +79,9 @@ test('downloads one MP4 and cleans up its temporary directory', async () => {
   const result = await downloadSocialVideo(
     'https://www.tiktok.com/@user/video/123',
     async (_command, args) => {
+      const userAgentIndex = args.indexOf('--user-agent');
+      assert.notEqual(userAgentIndex, -1);
+      assert.match(args[userAgentIndex + 1], /Mozilla\/5\.0.*Chrome/);
       const outputIndex = args.indexOf('--output');
       const outputTemplate = args[outputIndex + 1];
       outputPath = outputTemplate.replace('%(id)s.%(ext)s', '123.mp4');
@@ -168,4 +171,27 @@ test('rejects oversized downloads and removes the temporary file', async () => {
   );
 
   await assert.rejects(access(dirname(outputPath)));
+});
+
+test('reports TikTok webpage challenge failures with a stable error code', async () => {
+  const commandError = Object.assign(
+    new Error('Command failed: yt-dlp'),
+    {
+      code: 1,
+      stderr: 'ERROR: [TikTok] Unexpected response from webpage request',
+    },
+  );
+
+  await assert.rejects(
+    downloadSocialVideo(
+      'https://www.tiktok.com/@user/video/123',
+      async () => {
+        throw commandError;
+      },
+    ),
+    (error) => (
+      error.code === 'TIKTOK_REQUEST_BLOCKED' &&
+      error.cause === commandError
+    ),
+  );
 });

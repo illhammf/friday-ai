@@ -11,7 +11,8 @@ Personal WhatsApp assistant built with Node.js, WhatsApp Web, and Gemini.
 
 Copy `.env.example` to `.env`, then set `GEMINI_API_KEY`. `YT_DLP_PATH` and
 `FFMPEG_PATH` can be set to their executable paths if either program is not
-available on `PATH`.
+available on `PATH`. `YT_DLP_USER_AGENT` can optionally override the browser
+user-agent used when requesting social videos.
 
 ## Media features
 

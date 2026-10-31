@@ -542,6 +542,9 @@ client.on('message', async (message) => {
           } else if (errorCode === 'FFMPEG_NOT_INSTALLED') {
             reply =
               'Fitur unduh video belum siap di server Friday. Admin perlu memasang ffmpeg terlebih dahulu.';
+          } else if (errorCode === 'TIKTOK_REQUEST_BLOCKED') {
+            reply =
+              'TikTok sedang membatasi permintaan unduhan dari server Friday. Coba lagi beberapa saat lagi ya.';
           } else if (/64 MB|too large|maximum file size/i.test(errorMessage)) {
             reply =
               'Video terlalu besar untuk dikirim lewat WhatsApp. Coba tautan video yang lebih pendek atau berukuran lebih kecil ya.';

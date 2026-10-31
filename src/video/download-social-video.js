@@ -7,6 +7,8 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 const MAX_VIDEO_BYTES = 64 * 1024 * 1024;
 const VIDEO_DOWNLOAD_TIMEOUT_MS = 180_000;
+const DEFAULT_USER_AGENT =
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const SUPPORTED_HOSTS = new Set([
   'instagram.com',
   'www.instagram.com',
@@ -67,6 +69,8 @@ export async function downloadSocialVideo(
     '--no-warnings',
     '--no-progress',
     '--no-playlist',
+    '--user-agent',
+    process.env.YT_DLP_USER_AGENT || DEFAULT_USER_AGENT,
     '--max-filesize',
     '64M',
     '--format',
@@ -102,6 +106,12 @@ export async function downloadSocialVideo(
         },
       );
     } catch (error) {
+      const errorOutput = [
+        error?.message,
+        error?.stdout,
+        error?.stderr,
+      ].filter(Boolean).join('\n');
+
       if (error?.code === 'ENOENT') {
         const missingToolError = new Error(
           'yt-dlp tidak ditemukan. Pasang yt-dlp dan ffmpeg di mesin Friday, lalu pastikan keduanya tersedia di PATH.',
@@ -122,6 +132,18 @@ export async function downloadSocialVideo(
         );
         missingFfmpegError.code = 'FFMPEG_NOT_INSTALLED';
         throw missingFfmpegError;
+      }
+
+      if (
+        /unexpected response from webpage request/i.test(errorOutput) &&
+        /\btiktok\b/i.test(errorOutput)
+      ) {
+        const blockedRequestError = new Error(
+          'TikTok menolak respons permintaan unduhan dari server Friday.',
+          { cause: error },
+        );
+        blockedRequestError.code = 'TIKTOK_REQUEST_BLOCKED';
+        throw blockedRequestError;
       }
 
       throw error;
