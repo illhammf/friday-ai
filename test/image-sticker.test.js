@@ -219,6 +219,30 @@ test('rejects overlong sticker text before starting ffmpeg', async () => {
   assert.equal(conversionAttempts, 0);
 });
 
+test('reports captions that wrap beyond five lines separately from character limit', async () => {
+  const text = 'abcdefghij '.repeat(6) + 'abcdefghij';
+  assert.equal(Array.from(text).length, 76);
+  let conversionAttempts = 0;
+
+  await assert.rejects(
+    createImageSticker(sourceImage, {
+      text,
+      runFfmpeg: async () => {
+        conversionAttempts++;
+      },
+    }),
+    (error) => error.code === 'STICKER_TEXT_TOO_MANY_LINES',
+  );
+
+  assert.equal(conversionAttempts, 0);
+  const message = getImageStickerFailureMessage({
+    code: 'STICKER_TEXT_TOO_MANY_LINES',
+  });
+  assert.match(message, /lebih dari 5 baris/);
+  assert.match(message, /ringkas teks|kata yang lebih pendek/);
+  assert.doesNotMatch(message, /80 karakter/);
+});
+
 test('maps sticker errors to safe, actionable WhatsApp messages', () => {
   assert.match(
     getImageStickerFailureMessage({ code: 'STICKER_FFMPEG_MISSING' }),
@@ -231,6 +255,10 @@ test('maps sticker errors to safe, actionable WhatsApp messages', () => {
   assert.match(
     getImageStickerFailureMessage({ code: 'STICKER_TEXT_TOO_LONG' }),
     /maksimal 80 karakter/,
+  );
+  assert.match(
+    getImageStickerFailureMessage({ code: 'STICKER_TEXT_TOO_MANY_LINES' }),
+    /lebih dari 5 baris/,
   );
   assert.match(
     getImageStickerFailureMessage(new Error('internal stack trace')),

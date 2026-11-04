@@ -223,7 +223,9 @@ Friday, buat stiker crop
 Stickers are static WebP images fitted to a 512 × 512 canvas and kept below
 WhatsApp's 100 KB sticker limit. Without `crop`, Friday fits the full image
 inside the canvas. A centered crop can trim image edges; it does not identify
-faces, choose a subject, or remove the background.
+faces, choose a subject, or remove the background. Sticker captions are limited
+to 80 characters and five rendered lines; long words may wrap into multiple
+lines.
 
 ### Generate an image
 

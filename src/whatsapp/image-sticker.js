@@ -264,6 +264,8 @@ export function getImageStickerFailureMessage(error) {
       return 'Proses membuat stikernya terlalu lama. Coba kirim foto yang lebih kecil ya.';
     case 'STICKER_TEXT_TOO_LONG':
       return `Teks stikernya terlalu panjang. Pendekkan jadi maksimal ${MAX_STICKER_TEXT_LENGTH} karakter, ya.`;
+    case 'STICKER_TEXT_TOO_MANY_LINES':
+      return `Teks stikernya menjadi lebih dari ${MAX_STICKER_TEXT_LINES} baris. Coba ringkas teks atau gunakan kata yang lebih pendek, ya.`;
     default:
       return 'Foto diterima, tetapi stikernya belum berhasil dibuat. Coba kirim ulang fotonya ya.';
   }
@@ -303,8 +305,8 @@ function wrapStickerText(text) {
 
   if (lines.length > MAX_STICKER_TEXT_LINES) {
     throw createStickerError(
-      'STICKER_TEXT_TOO_LONG',
-      `Teks stiker melebihi ${MAX_STICKER_TEXT_LENGTH} karakter.`,
+      'STICKER_TEXT_TOO_MANY_LINES',
+      `Teks stiker melebihi ${MAX_STICKER_TEXT_LINES} baris.`,
     );
   }
 
