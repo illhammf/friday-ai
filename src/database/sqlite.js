@@ -1,34 +1,15 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
-
-const SCHEMA = `
-  CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL,
-    role TEXT NOT NULL CHECK (role IN ('user', 'model')),
-    content TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_messages_session
-  ON messages (session_id, id);
-
-  CREATE TABLE IF NOT EXISTS user_memories (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL,
-    content TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (session_id, content)
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_user_memories_session
-  ON user_memories (session_id, id);
-`;
+import { databaseMigrations } from './migrations/index.js';
+import { runMigrations } from './migration-runner.js';
 
 let defaultDatabase;
 
-export function createDatabase({ dbPath }) {
+export function createDatabase({
+  dbPath,
+  migrations = databaseMigrations,
+}) {
   if (typeof dbPath !== 'string' || !dbPath.trim()) {
     throw new TypeError('dbPath must be a non-empty string.');
   }
@@ -37,7 +18,7 @@ export function createDatabase({ dbPath }) {
   const db = new DatabaseSync(dbPath);
 
   try {
-    db.exec(SCHEMA);
+    runMigrations(db, migrations);
 
     const insertMessage = db.prepare(`
       INSERT INTO messages (session_id, role, content)
@@ -156,7 +137,15 @@ export function createDatabase({ dbPath }) {
       },
     };
   } catch (error) {
-    db.close();
+    try {
+      db.close();
+    } catch (closeError) {
+      throw new AggregateError(
+        [error, closeError],
+        'Database initialization failed and the connection could not be closed.',
+        { cause: error },
+      );
+    }
     throw error;
   }
 }
