@@ -1,4 +1,4 @@
-// Modul riwayat percakapan menggunakan koneksi SQLite bersama.
+// API kompatibilitas untuk operasi database default yang dibuka secara lazy.
 export {
   saveMessage,
   loadHistory,
@@ -8,5 +8,6 @@ export {
   clearUserMemories,
   privateSessionId,
   groupSessionId,
+  initializeDefaultDatabase,
   closeDatabase,
 } from './sqlite.js';

@@ -1,4 +1,5 @@
 export function createShutdownHandler({
+  stopAccepting = async () => {},
   drainMessages,
   destroyClient,
   closeResources,
@@ -19,6 +20,7 @@ export function createShutdownHandler({
       let failed = false;
 
       for (const [label, operation] of [
+        ['menghentikan penerimaan pesan', stopAccepting],
         ['menunggu antrean pesan', drainMessages],
         ['menutup koneksi WhatsApp', destroyClient],
         ['menutup database', closeResources],
