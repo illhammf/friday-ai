@@ -4,6 +4,8 @@ import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { createApplication } from '../src/application/application-lifecycle.js';
+import { createMessageService } from '../src/application/message-service.js';
 
 const repositoryRoot = process.cwd();
 let sqliteModule;
@@ -175,15 +177,178 @@ test('database factory preserves data after close and reopen', { skip: skipSQLit
   });
 });
 
-test('importing the executable entry point does not create database or integration resources', async () => {
+test('database, application lifecycle, and message service share only injected temporary state', { skip: skipSQLiteTests }, async () => {
   await withTemporaryDirectory(async (directory) => {
-    const entryPoint = pathToFileURL(
-      join(repositoryRoot, 'src', 'index.js'),
+    const firstPath = join(directory, 'first-app.sqlite');
+    const secondPath = join(directory, 'second-app.sqlite');
+    const logger = { log() {}, error() {} };
+    const createTestApp = (dbPath) => {
+      let database;
+      const application = createApplication({
+        openDatabase: () => {
+          database = sqliteModule.createDatabase({ dbPath });
+          return database;
+        },
+        createClient: async () => ({ destroy: async () => {} }),
+        initializeClient: async () => {},
+        stopAccepting: () => {},
+        drainMessages: async () => {},
+        logger,
+      });
+
+      const service = createMessageService({
+        botName: 'Friday',
+        getReadyAt: () => 1,
+        sessions: {
+          privateSessionId: (senderId) => `private:${senderId}`,
+          groupSessionId: (chatId) => `group:${chatId}`,
+        },
+        memory: {
+          parseCommand: () => null,
+          handleCommand: async () => null,
+        },
+        video: {
+          getUrls: () => [],
+          isDownloadRequest: () => false,
+          download: async () => null,
+          getFailureMessage: () => '',
+        },
+        sticker: {
+          isRequest: () => false,
+          parseOptions: () => ({}),
+          create: async () => null,
+          getFailureMessage: () => '',
+        },
+        image: {
+          isGenerationRequest: () => false,
+          generate: async () => null,
+          isQuotaError: () => false,
+          getQuotaDiagnostic: () => '',
+          getFailureMessage: () => '',
+        },
+        assistant: {
+          ask: async ({ privateSession, question }) => {
+            database.saveMessage(privateSession, 'user', question);
+            database.saveMessage(privateSession, 'model', 'temporary reply');
+            return 'temporary reply';
+          },
+          getFailureMessage: () => 'error',
+        },
+        audio: {
+          transcribe: async () => '',
+          generate: async () => null,
+          isQuotaError: () => false,
+          getFailureMessage: (_error, text) => text,
+        },
+        history: { save: (...args) => database.saveMessage(...args) },
+        formatMessage: (text) => text,
+        deliver: {
+          sendVideo: async () => {},
+          sendSticker: async () => {},
+          sendImage: async () => {},
+          sendVoice: async () => {},
+        },
+        logger: { event() {}, error() {} },
+      });
+
+      return { application, service, getDatabase: () => database };
+    };
+
+    const first = createTestApp(firstPath);
+    const second = createTestApp(secondPath);
+    assert.equal(first.application.state, 'idle');
+    assert.equal(first.getDatabase(), undefined);
+
+    await first.application.start();
+    await second.application.start();
+
+    const incoming = {
+      messageId: 'message-1',
+      chatId: 'user@c.us',
+      senderId: 'user@c.us',
+      chatType: 'private',
+      messageType: 'chat',
+      text: 'hello',
+      caption: '',
+      timestamp: 2,
+      group: null,
+      media: null,
+    };
+    const replies = [];
+    await first.service.handle(incoming, {
+      reply: async (text) => replies.push(text),
+    });
+
+    assert.deepEqual(replies, ['temporary reply']);
+    assert.equal(first.getDatabase().loadHistory('private:user@c.us').length, 2);
+    assert.equal(second.getDatabase().loadHistory('private:user@c.us').length, 0);
+
+    await Promise.all([
+      first.application.shutdown('TEST'),
+      second.application.shutdown('TEST'),
+    ]);
+
+    const reopened = sqliteModule.createDatabase({ dbPath: firstPath });
+    try {
+      assert.deepEqual(reopened.loadHistory('private:user@c.us'), [
+        { role: 'user', parts: [{ text: 'hello' }] },
+        { role: 'model', parts: [{ text: 'temporary reply' }] },
+      ]);
+    } finally {
+      reopened.close();
+    }
+  });
+});
+
+test('application startup failure closes the injected temporary database', { skip: skipSQLiteTests }, async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const dbPath = join(directory, 'startup-failure.sqlite');
+    let database;
+    const application = createApplication({
+      openDatabase: () => {
+        database = sqliteModule.createDatabase({ dbPath });
+        return database;
+      },
+      createClient: async () => ({
+        destroy: async () => {},
+      }),
+      initializeClient: async () => {
+        throw new Error('injected initialization failure');
+      },
+      stopAccepting: () => {},
+      drainMessages: async () => {},
+      logger: { log() {}, error() {} },
+    });
+
+    await assert.rejects(application.start(), /injected initialization failure/);
+    assert.equal(application.state, 'stopped');
+    assert.throws(() => database.loadHistory('private:user'), /connection is closed/i);
+
+    const reopened = sqliteModule.createDatabase({ dbPath });
+    reopened.close();
+  });
+});
+
+test('importing entry point and application modules starts no external integration or database', async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const entryPoint = pathToFileURL(join(repositoryRoot, 'src', 'index.js')).href;
+    const lifecycleModule = pathToFileURL(
+      join(repositoryRoot, 'src', 'application', 'application-lifecycle.js'),
+    ).href;
+    const messageServiceModule = pathToFileURL(
+      join(repositoryRoot, 'src', 'application', 'message-service.js'),
     ).href;
     const { spawnSync } = await import('node:child_process');
     const result = spawnSync(
       process.execPath,
-      ['--input-type=module', '-e', 'await import(process.argv[1])', entryPoint],
+      [
+        '--input-type=module',
+        '-e',
+        'await Promise.all(process.argv.slice(1).map((specifier) => import(specifier)))',
+        entryPoint,
+        lifecycleModule,
+        messageServiceModule,
+      ],
       {
         cwd: directory,
         encoding: 'utf8',

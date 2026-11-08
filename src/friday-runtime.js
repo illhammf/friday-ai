@@ -47,6 +47,7 @@ import {
   getMessageDeduplicationKey,
   isQueueableMessage,
 } from './whatsapp/message-queue.js';
+import { createWhatsAppAdapters, registerQueuedMessageHandler } from './whatsapp/message-adapter.js';
 import {
   getRuntimeSummary,
   inspectRuntime,
@@ -341,6 +342,7 @@ const incomingMessageDeduplicator = createMessageDeduplicator();
 let acceptingMessages = false;
 let fridayReadyAt = 0;
 let client;
+let whatsappAdapters;
 let databaseOperations;
 
 function configureClientEvents(clientInstance) {
@@ -470,40 +472,10 @@ const messageService = createMessageService({
   },
   formatMessage: formatWhatsAppMessage,
   deliver: {
-    sendVideo: (chatId, videoResult, caption) => {
-      const media = MessageMedia.fromFilePath(videoResult.path);
-      return client.sendMessage(chatId, media, { caption });
-    },
-    sendSticker: async (chatId, stickerResult, botName) => {
-      const media = new MessageMedia(
-        stickerResult.mimetype,
-        await readImageStickerData(stickerResult.path),
-        'friday-sticker.webp',
-        stickerResult.size,
-      );
-      return client.sendMessage(chatId, media, {
-        sendMediaAsSticker: true,
-        stickerName: botName,
-        stickerAuthor: 'Friday AI',
-      });
-    },
-    sendImage: (chatId, generatedImage, caption) => {
-      const extension = generatedImage.mimeType === 'image/jpeg'
-        ? 'jpg'
-        : generatedImage.mimeType === 'image/webp'
-          ? 'webp'
-          : 'png';
-      const media = new MessageMedia(
-        generatedImage.mimeType,
-        generatedImage.data,
-        `friday-generated.${extension}`,
-      );
-      return client.sendMessage(chatId, media, { caption });
-    },
-    sendVoice: (chatId, path) => {
-      const media = MessageMedia.fromFilePath(path);
-      return client.sendMessage(chatId, media, { sendAudioAsVoice: true });
-    },
+    sendVideo: (...args) => whatsappAdapters.deliver.sendVideo(...args),
+    sendSticker: (...args) => whatsappAdapters.deliver.sendSticker(...args),
+    sendImage: (...args) => whatsappAdapters.deliver.sendImage(...args),
+    sendVoice: (...args) => whatsappAdapters.deliver.sendVoice(...args),
   },
   logger: {
     event: logEvent,
@@ -513,109 +485,24 @@ const messageService = createMessageService({
   },
 });
 
-function normalizeIncomingMessage(message) {
-  const id = message.id;
-
-  if (id && id._serialized == null) {
-    const serializedId = id.$1 ?? (
-      id.fromMe != null && id.remote && id.id
-        ? `${id.fromMe}_${id.remote}_${id.id}`
-        : null
-    );
-
-    if (serializedId) {
-      id._serialized = serializedId;
-    }
-  }
-
-  const isGroup = message.from.endsWith('@g.us');
-  const mediaDetails = message._data || {};
-
-  return {
-    messageId: typeof id === 'string'
-      ? id
-      : id?._serialized || id?.$1 || null,
-    chatId: message.from,
-    senderId: isGroup
-      ? (message.author || message.from)
-      : message.from,
-    chatType: isGroup ? 'group' : 'private',
-    messageType: message.type,
-    text: message.body?.trim() || '',
-    caption: message.type === 'image'
-      ? (message.body?.trim() || '')
-      : '',
-    timestamp: Number(message.timestamp),
-    group: isGroup
-      ? { senderName: mediaDetails.notifyName || 'Anggota grup' }
-      : null,
-    media: message.hasMedia || message.type === 'image' || message.type === 'ptt'
-      ? {
-          download: () => downloadMediaWithRetry(message),
-          diagnostics: {
-            type: message.type,
-            hasMedia: message.hasMedia,
-            mimetype: mediaDetails.mimetype || 'unknown',
-            size: mediaDetails.size ?? 'unknown',
-            directPath: Boolean(mediaDetails.directPath),
-            mediaKey: Boolean(mediaDetails.mediaKey),
-            encFilehash: Boolean(mediaDetails.encFilehash),
-            mediaStage: mediaDetails.mediaData?.mediaStage || 'unknown',
-          },
-        }
-      : null,
-  };
-}
-
-function handleIncomingMessage(message) {
-  const normalizedMessage = normalizeIncomingMessage(message);
-
-  return messageService.handle(normalizedMessage, {
-    reply: (text) => message.reply(text),
-  });
-}
-
 function registerMessageHandler(clientInstance) {
-  clientInstance.on('message', (message) => {
-    if (!acceptingMessages) {
-      return;
-    }
-
-    if (!isQueueableMessage(message, BOT_NAME)) {
-      return;
-    }
-
-    const deduplicationKey = getMessageDeduplicationKey(message);
-
-    if (!incomingMessageDeduplicator.claim(deduplicationKey)) {
-      console.log('[Diabaikan] Event pesan WhatsApp duplikat.');
-      return;
-    }
-
-    const queuedMessage = incomingMessageQueue.enqueue(
-      message.from,
-      () => handleIncomingMessage(message),
-    );
-
-    if (!queuedMessage) {
-      incomingMessageDeduplicator.release(deduplicationKey);
-      void message.reply(
-        'Aku masih memproses beberapa pesan di chat ini. Pesan baru ini belum masuk antrean, coba kirim lagi sebentar ya.',
-      ).catch((error) => {
-        console.error(
-          '[Pemberitahuan antrean penuh gagal]',
-          error?.message || error,
-        );
-      });
-      return;
-    }
-
-    queuedMessage.catch((error) => {
-      console.error(
-        '[Pemrosesan pesan antrean gagal]',
-        inspect(error, { depth: 4, colors: false }),
-      );
-    });
+  registerQueuedMessageHandler(clientInstance, {
+    botName: BOT_NAME,
+    canAccept: () => acceptingMessages,
+    isQueueableMessage,
+    getDeduplicationKey: getMessageDeduplicationKey,
+    deduplicator: incomingMessageDeduplicator,
+    queue: incomingMessageQueue,
+    normalize: (message) => whatsappAdapters.normalize(message),
+    handle: (message, transport) => messageService.handle(message, transport),
+    reply: (message) => whatsappAdapters.reply(message),
+    logger: {
+      log: console.log.bind(console),
+      error: (...args) => console.error(
+        args[0],
+        inspect(args[1], { depth: 4, colors: false }),
+      ),
+    },
   });
 }
 
@@ -638,6 +525,12 @@ const application = createApplication({
     return client;
   },
   configureClient: async (createdClient) => {
+    whatsappAdapters = createWhatsAppAdapters({
+      client: createdClient,
+      MessageMedia,
+      downloadMedia: downloadMediaWithRetry,
+      readStickerData: readImageStickerData,
+    });
     configureClientEvents(createdClient);
     registerMessageHandler(createdClient);
   },
