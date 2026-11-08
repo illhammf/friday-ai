@@ -59,6 +59,7 @@ import {
   inspectRuntime,
 } from './config/runtime-diagnostics.js';
 import { getAiFailureMessage } from './ai/ai-failure-message.js';
+import { createMessageService } from './application/message-service.js';
 import {
   generateWithModelFallback,
   getModelChain,
@@ -350,8 +351,6 @@ const client = new Client({
   },
 });
 
-// Untuk mencegah permintaan bersamaan dari chat yang sama, kita menggunakan Set untuk melacak chat aktif.
-const activeChats = new Set();
 const incomingMessageQueue = createMessageQueue({ maxPending: 3 });
 const incomingMessageDeduplicator = createMessageDeduplicator();
 let acceptingMessages = true;
@@ -419,577 +418,170 @@ async function logRuntimeDiagnostics() {
 }
 
 
-async function handleIncomingMessage(message) {
-  
-    if (message.fromMe) return;
-
-    // Kompatibilitas ID pesan WhatsApp Web
-    const messageId = message.id;
-
-    if (messageId && messageId._serialized == null) {
-      const serializedId =
-        messageId.$1 ??
-        (
-          messageId.fromMe != null &&
-          messageId.remote &&
-          messageId.id
-            ? `${messageId.fromMe}_${messageId.remote}_${messageId.id}`
-            : null
-        );
-
-      if (serializedId) {
-        messageId._serialized = serializedId;
-      }
-    }
-  try {
-    // Abaikan pesan dari akun FRIDAY sendiri.
-    if (message.fromMe) return;
-
-    // Identifikasi jenis pesan.
-    const isVoiceNote = message.type === 'ptt';
-    const isImage = message.type === 'image';
-    const hasText = Boolean(message.body?.trim());
-
-    // Abaikan pesan yang tidak didukung.
-    if (!isVoiceNote && !isImage && !hasText) return;
-
-    // Definisikan pertanyaan sebelum digunakan.
-    let question = message.body?.trim() || '';
-
-    // Abaikan pesan sebelum FRIDAY siap.
-    const messageTime = Number(message.timestamp);
-
-    if (
-      !fridayReadyAt ||
-      !Number.isFinite(messageTime) ||
-      messageTime <= 0
-    ) {
-      console.log('[Diabaikan] Timestamp tidak valid:', {
-        messageTime,
-        fridayReadyAt,
+const messageService = createMessageService({
+  botName: BOT_NAME,
+  getReadyAt: () => fridayReadyAt,
+  sessions: {
+    privateSessionId,
+    groupSessionId,
+  },
+  memory: {
+    parseCommand: parseMemoryCommand,
+    handleCommand: (text, sessionId) => handleMemoryCommand(text, sessionId, {
+      add: saveUserMemory,
+      list: loadUserMemories,
+      delete: deleteUserMemory,
+      clear: clearUserMemories,
+    }),
+  },
+  video: {
+    getUrls: getSocialVideoUrls,
+    isDownloadRequest: isSocialVideoDownloadRequest,
+    download: downloadSocialVideo,
+    getFailureMessage: getVideoDownloadFailureMessage,
+  },
+  sticker: {
+    isRequest: isImageStickerRequest,
+    parseOptions: parseImageStickerOptions,
+    create: createImageSticker,
+    getFailureMessage: getImageStickerFailureMessage,
+  },
+  image: {
+    isGenerationRequest: isImageGenerationRequest,
+    generate: generateImage,
+    isQuotaError: isImageGenerationQuotaError,
+    getQuotaDiagnostic: (error) => {
+      const diagnostic = getImageGenerationQuotaDiagnostic(error);
+      return [
+        diagnostic.model,
+        diagnostic.details,
+        diagnostic.retryText,
+        diagnostic.freeTierLimitZero
+          ? 'Free Tier limit model=0; menunggu saja mungkin tidak cukup.'
+          : '',
+        'Tindakan: cek project API key, kuota model, dan billing/plan di Google AI Studio.',
+      ].filter(Boolean).join(' │ ');
+    },
+    getFailureMessage: getImageGenerationFailureMessage,
+  },
+  assistant: {
+    ask: askFriday,
+    getFailureMessage: getAiFailureMessage,
+  },
+  audio: {
+    transcribe: transcribeVoiceNote,
+    generate: generateVoiceNote,
+    isQuotaError: isVoiceNoteQuotaError,
+    getFailureMessage: getVoiceNoteFailureMessage,
+  },
+  history: {
+    save: saveMessage,
+  },
+  formatMessage: formatWhatsAppMessage,
+  deliver: {
+    sendVideo: (chatId, videoResult, caption) => {
+      const media = MessageMedia.fromFilePath(videoResult.path);
+      return client.sendMessage(chatId, media, { caption });
+    },
+    sendSticker: async (chatId, stickerResult, botName) => {
+      const media = new MessageMedia(
+        stickerResult.mimetype,
+        await readImageStickerData(stickerResult.path),
+        'friday-sticker.webp',
+        stickerResult.size,
+      );
+      return client.sendMessage(chatId, media, {
+        sendMediaAsSticker: true,
+        stickerName: botName,
+        stickerAuthor: 'Friday AI',
       });
-      return;
-    }
-
-    if (messageTime < fridayReadyAt) {
-      console.log(
-        '[Diabaikan] Pesan dikirim sebelum FRIDAY siap.'
+    },
+    sendImage: (chatId, generatedImage, caption) => {
+      const extension = generatedImage.mimeType === 'image/jpeg'
+        ? 'jpg'
+        : generatedImage.mimeType === 'image/webp'
+          ? 'webp'
+          : 'png';
+      const media = new MessageMedia(
+        generatedImage.mimeType,
+        generatedImage.data,
+        `friday-generated.${extension}`,
       );
-      return;
+      return client.sendMessage(chatId, media, { caption });
+    },
+    sendVoice: (chatId, path) => {
+      const media = MessageMedia.fromFilePath(path);
+      return client.sendMessage(chatId, media, { sendAudioAsVoice: true });
+    },
+  },
+  logger: {
+    event: logEvent,
+    error: (label, error) => {
+      console.error(`[${label}]`, inspect(error, { depth: 6, colors: false }));
+    },
+  },
+});
+
+function normalizeIncomingMessage(message) {
+  const id = message.id;
+
+  if (id && id._serialized == null) {
+    const serializedId = id.$1 ?? (
+      id.fromMe != null && id.remote && id.id
+        ? `${id.fromMe}_${id.remote}_${id.id}`
+        : null
+    );
+
+    if (serializedId) {
+      id._serialized = serializedId;
     }
-
-    // Identifikasi chat pribadi atau grup.
-    const isGroup = message.from.endsWith('@g.us');
-
-    // Di grup, pesan harus diawali nama FRIDAY.
-    if (isGroup) {
-      const escapedName = BOT_NAME.replace(
-        /[.*+?^${}()|[\]\\]/g,
-        '\\$&'
-      );
-
-      const prefix = new RegExp(
-        `^${escapedName}\\b[\\s,:-]*`,
-        'i'
-      );
-
-      if (!prefix.test(question)) {
-        console.log(
-          '[Diabaikan] FRIDAY tidak dipanggil di grup.'
-        );
-        return;
-      }
-
-      question = question.replace(prefix, '').trim();
-
-      // Sapaan teks tanpa pertanyaan.
-      if (!question && !isVoiceNote && !isImage) {
-        await message.reply(
-          `Halo! Aku ${BOT_NAME}. Ada yang bisa kubantu?`
-        );
-        return;
-      }
-    } else if (!question && !isVoiceNote && !isImage) {
-      // Sapaan kosong di chat pribadi.
-      await message.reply(
-        `Halo! Aku ${BOT_NAME}. Ada yang bisa kubantu?`
-      );
-      return;
-    }
-
-    const socialVideoUrls = getSocialVideoUrls(question);
-    const asksToDownloadVideo =
-      socialVideoUrls.length > 0 &&
-      isSocialVideoDownloadRequest(question);
-
-    if (asksToDownloadVideo && socialVideoUrls.length > 1) {
-      await message.reply(
-        'Kirim satu tautan TikTok atau Instagram dulu ya, supaya aku bisa mengunduh videonya.'
-      );
-      return;
-    }
-
-    // Identitas dan sesi percakapan.
-    const senderId = isGroup
-      ? (message.author || message.from)
-      : message.from;
-
-    const privateSession = privateSessionId(senderId);
-
-    const sharedGroupSession = isGroup
-      ? groupSessionId(message.from)
-      : null;
-
-    const senderName = isGroup
-      ? (message._data?.notifyName || 'Anggota grup')
-      : 'Pengguna';
-
-    const memoryCommand = parseMemoryCommand(question);
-
-    if (memoryCommand && !isImage && !isVoiceNote) {
-      if (isGroup) {
-        await message.reply(
-          'Memori Friday hanya tersedia di chat pribadi dan tidak disimpan dari grup. Kirim perintah memori langsung ke chat pribadi Friday, ya.',
-        );
-        return;
-      }
-
-      try {
-        const reply = await handleMemoryCommand(question, privateSession, {
-          add: saveUserMemory,
-          list: loadUserMemories,
-          delete: deleteUserMemory,
-          clear: clearUserMemories,
-        });
-
-        if (reply) {
-          await message.reply(formatWhatsAppMessage(reply));
-          logEvent('success', 'Perintah memori diproses', memoryCommand.action);
-        }
-      } catch (error) {
-        console.error(
-          '[Perintah memori gagal]',
-          inspect(error, { depth: 4, colors: false }),
-        );
-        await message.reply(
-          'Memorimu belum berhasil diproses. Coba lagi sebentar ya.',
-        );
-        logEvent(
-          'error',
-          'Perintah memori gagal',
-          error?.code || 'periksa log terminal',
-        );
-      }
-
-      return;
-    }
-
-    // Cegah permintaan bersamaan dari sesi pengguna yang sama.
-    const sessionId = privateSession;
-
-    if (activeChats.has(sessionId)) {
-      await message.reply(
-        'Sebentar ya, aku masih memproses pesan sebelumnya.'
-      );
-      return;
-    }
-
-    activeChats.add(sessionId);
-
-    try {
-      if (asksToDownloadVideo && socialVideoUrls.length === 1) {
-        let videoResult = null;
-        let videoStage = 'download';
-
-        try {
-          videoResult = await downloadSocialVideo(socialVideoUrls[0]);
-          videoStage = 'send';
-          const videoMedia = MessageMedia.fromFilePath(videoResult.path);
-
-          await client.sendMessage(message.from, videoMedia, {
-            caption: 'Ini video dari tautan yang kamu kirim.',
-          });
-
-          logEvent('success', 'Video berhasil diunduh dan dikirim', 'WhatsApp');
-        } catch (error) {
-          const errorCode = error?.code;
-
-          console.error(
-            videoStage === 'send'
-              ? '[Pengiriman video WhatsApp gagal]'
-              : '[Unduhan video gagal]',
-            videoStage === 'send'
-              ? {
-                  size: videoResult?.size ?? null,
-                  format: videoResult?.format ?? null,
-                  error: inspect(error, { depth: 4, colors: false }),
-                }
-              : inspect(error, { depth: 4, colors: false }),
-          );
-
-          await message.reply(
-            getVideoDownloadFailureMessage(error, videoStage),
-          );
-          logEvent(
-            'error',
-            videoStage === 'send'
-              ? 'Pengiriman video WhatsApp gagal'
-              : 'Unduhan video gagal',
-            errorCode || 'periksa log terminal',
-          );
-        } finally {
-          if (videoResult?.cleanup) {
-            await videoResult.cleanup();
-          }
-        }
-
-        return;
-      }
-
-      // Unduh dan transkripsikan Voice Note masuk.
-      if (isVoiceNote) {
-        const media = await downloadMediaWithRetry(message);
-
-        if (!media) {
-          await message.reply(
-            'Maaf, Voice Note tidak bisa diunduh. Coba kirim ulang ya.'
-          );
-          return;
-        }
-
-        const transcript = (
-          await transcribeVoiceNote(media)
-        )?.trim();
-
-        if (!transcript) {
-          await message.reply(
-            'Maaf, isi Voice Note belum bisa kupahami. Coba kirim ulang atau tuliskan pesannya ya.'
-          );
-          return;
-        }
-
-        console.log('[Transkripsi Voice Note]', transcript);
-
-        question = question
-          ? `${question}\n\nIsi Voice Note: ${transcript}`
-          : transcript;
-      }
-
-      // Unduh gambar untuk analisis Vision AI.
-      let image = null;
-
-      if (isImage) {
-        let media;
-
-        try {
-          media = await downloadMediaWithRetry(message);
-        } catch (error) {
-          const cause = error?.cause;
-          const detail = cause?.message || error?.message || String(error);
-          const mediaDetails = [
-            `type=${message.type}`,
-            `hasMedia=${message.hasMedia}`,
-            `mimetype=${message._data?.mimetype || 'unknown'}`,
-            `size=${message._data?.size ?? 'unknown'}`,
-            `directPath=${Boolean(message._data?.directPath)}`,
-            `mediaKey=${Boolean(message._data?.mediaKey)}`,
-            `encFilehash=${Boolean(message._data?.encFilehash)}`,
-            `mediaStage=${message._data?.mediaData?.mediaStage || 'unknown'}`,
-          ].join(' ');
-
-          console.error('[Detail unduhan media]', mediaDetails);
-          console.error(
-            '[Error unduhan media]',
-            inspect(cause?.mediaDiagnostic || error, {
-              depth: 8,
-              colors: false,
-            }),
-          );
-          logEvent(
-            'error',
-            'WhatsApp gagal mengunduh gambar',
-            detail,
-          );
-          await message.reply(
-            'Aku menerima fotonya, tetapi WhatsApp gagal mengunduh file gambar. Coba teruskan fotonya ke chat Friday. Jika masih gagal, admin perlu memeriksa detail error WhatsApp Web di log.'
-          );
-          return;
-        }
-
-        if (!media) {
-          await message.reply('Maaf, gambar belum bisa dibaca. Coba kirim ulang ya.');
-          return;
-        }
-
-        if (!media.mimetype?.startsWith('image/')) {
-          await message.reply('File yang diterima bukan gambar yang didukung.');
-          return;
-        }
-
-        if (isImageStickerRequest(question)) {
-          let stickerResult;
-
-          try {
-            const stickerOptions = parseImageStickerOptions(question);
-            stickerResult = await createImageSticker(media, stickerOptions);
-            const stickerMedia = new MessageMedia(
-              stickerResult.mimetype,
-              await readImageStickerData(stickerResult.path),
-              'friday-sticker.webp',
-              stickerResult.size,
-            );
-
-            await client.sendMessage(message.from, stickerMedia, {
-              sendMediaAsSticker: true,
-              stickerName: BOT_NAME,
-              stickerAuthor: 'Friday AI',
-            });
-
-            const stickerSession = sharedGroupSession || privateSession;
-            const userMessage = isGroup
-              ? `${senderName}: ${question}`
-              : question;
-
-            saveMessage(stickerSession, 'user', userMessage);
-            saveMessage(stickerSession, 'model', 'Stiker berhasil dibuat dan dikirim.');
-            logEvent('success', 'Stiker berhasil dibuat dan dikirim', 'WhatsApp');
-          } catch (error) {
-            console.error(
-              '[Pembuatan stiker gagal]',
-              inspect(error, { depth: 4, colors: false }),
-            );
-            await message.reply(getImageStickerFailureMessage(error));
-            logEvent(
-              'error',
-              'Pembuatan atau pengiriman stiker gagal',
-              error?.code || 'periksa log terminal',
-            );
-          } finally {
-            if (stickerResult?.cleanup) {
-              await stickerResult.cleanup();
-            }
-          }
-
-          return;
-        }
-
-        image = {
-          mimetype: media.mimetype,
-          data: media.data,
-        };
-
-        if (!question) {
-          question = 'Jelaskan gambar ini secara rinci.';
-        }
-      }
-
-      if (!image && isImageGenerationRequest(question)) {
-        logEvent(
-          'ai',
-          'Permintaan gambar dikenali',
-          `Model: ${process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image'}`,
-        );
-        let generatedImage;
-
-        try {
-          generatedImage = await generateImage(question);
-        } catch (error) {
-          if (isImageGenerationQuotaError(error)) {
-            const diagnostic = getImageGenerationQuotaDiagnostic(error);
-            const terminalDetails = [
-              diagnostic.details,
-              diagnostic.retryText,
-              diagnostic.freeTierLimitZero
-                ? 'Free Tier limit model=0; menunggu saja mungkin tidak cukup.'
-                : '',
-              'Tindakan: cek project API key, kuota model, dan billing/plan di Google AI Studio.',
-            ].filter(Boolean).join(' ');
-
-            logEvent(
-              'error',
-              'Kuota generate gambar tidak tersedia',
-              `${diagnostic.model} │ ${terminalDetails}`,
-            );
-          } else {
-            console.error(
-              '[Pembuatan gambar gagal]',
-              inspect(error, { depth: 5, colors: false }),
-            );
-          }
-
-          await message.reply(getImageGenerationFailureMessage(error));
-          return;
-        }
-
-        const extension = generatedImage.mimeType === 'image/jpeg'
-          ? 'jpg'
-          : generatedImage.mimeType === 'image/webp'
-            ? 'webp'
-            : 'png';
-        const imageMedia = new MessageMedia(
-          generatedImage.mimeType,
-          generatedImage.data,
-          `friday-generated.${extension}`,
-        );
-        const caption = (
-          generatedImage.text || 'Ini gambar yang kamu minta.'
-        ).slice(0, 1000);
-
-        await client.sendMessage(message.from, imageMedia, {
-          caption: formatWhatsAppMessage(caption),
-        });
-
-        const activeSession = sharedGroupSession || privateSession;
-        const userMessage = isGroup
-          ? `${senderName}: ${question}`
-          : question;
-
-        saveMessage(activeSession, 'user', userMessage);
-        saveMessage(
-          activeSession,
-          'model',
-          `Gambar dibuat untuk permintaan: ${question}`,
-        );
-        logEvent('success', 'Gambar berhasil dibuat dan dikirim', 'WhatsApp');
-        return;
-      }
-
-      logDivider();
-
-      logEvent(
-        'info',
-        `Pesan masuk · ${isGroup ? 'Grup' : 'Pribadi'}`,
-        `Sesi: ${sessionId}`
-      );
-
-      // Kirim pertanyaan beserta gambar ke model AI.
-      const answer = await askFriday({
-        question,
-        privateSession,
-        sharedGroupSession,
-        senderName,
-        image,
-      });
-
-      // Deteksi permintaan balasan suara.
-
-      // Deteksi apakah pengguna meminta jawaban berupa Voice Note.
-       const asksForVoice =
-          /\b(?:vn|voice[\s-]?note|voice message|pesan suara)\b/i.test(question) ||
-          /\b(?:balas|jawab|bales)(?:lah)?\b.{0,100}\b(?:pakai|pake|dengan|menggunakan|lewat|melalui)\s+(?:vn|suara|voice[\s-]?note|audio)\b/i.test(question) ||
-          /\b(?:kirim|buat|bikin|ubah|jadikan)\b.{0,60}\b(?:vn|voice[\s-]?note|pesan suara)\b/i.test(question) ||
-          /\b(?:ngomong|berbicara|ucapkan|bacakan)\b/i.test(question);
-
-        // Voice Note masuk atau permintaan VN akan diarahkan ke pengiriman audio.
-        if (isVoiceNote || asksForVoice) {
-          let audioResult = null;
-          let audioSent = false;
-
-          try {
-            console.log('[VN] Menyiapkan jawaban audio...');
-
-            audioResult = await generateVoiceNote(answer);
-
-            if (!audioResult?.path) {
-              throw new Error(
-                'Proses pembuat audio tidak menghasilkan file audio.'
-              );
-            }
-
-            const audioMedia = MessageMedia.fromFilePath(
-              audioResult.path
-            );
-
-            await client.sendMessage(message.from, audioMedia, {
-              sendAudioAsVoice: true,
-            });
-
-            audioSent = true;
-
-            logEvent('voice', 'Voice Note berhasil dikirim', 'WhatsApp');
-
-          } catch (error) {
-            console.error(
-              '[TTS/pengiriman audio gagal]',
-              inspect(error, { depth: 6, colors: false }),
-            );
-
-            if (isVoiceNoteQuotaError(error)) {
-              logEvent(
-                'warn',
-                'Kuota Voice Note tercapai',
-                `Status: ${error?.status || error?.code || 'unknown'}; detail lengkap ada di log terminal.`,
-              );
-            }
-
-            // Beri tahu pengguna secara natural dan tetap sediakan jawaban teks.
-            const fallbackText = getVoiceNoteFailureMessage(error, answer);
-
-            try {
-              await message.reply(formatWhatsAppMessage(fallbackText));
-
-              console.log(
-                '[Fallback] Penjelasan dan jawaban teks berhasil dikirim.'
-              );
-            } catch (replyError) {
-              console.error(
-                '[Fallback teks gagal]',
-                replyError?.message || replyError
-              );
-            }
-          } finally {
-            if (audioResult?.cleanup) {
-              try {
-                await audioResult.cleanup();
-              } catch (cleanupError) {
-                console.error(
-                  '[Cleanup audio gagal]',
-                  cleanupError?.message || cleanupError
-                );
-              }
-            }
-          }
-
-          if (audioSent) {
-            console.log('[VN] Proses pengiriman selesai.');
-          }
-        } else {
-          // Permintaan biasa tetap mendapatkan jawaban teks.
-          await message.reply(formatWhatsAppMessage(answer));
-
-          logEvent('success', 'Jawaban teks berhasil dikirim', 'WhatsApp');
-        }
-    } finally {
-      // Pastikan sesi tidak terkunci jika terjadi error.
-      activeChats.delete(sessionId);
-    }
-      
-    } catch (error) {
-        console.error(
-          '\n========== DETAIL ERROR FRIDAY =========='
-        );
-        console.error(
-          inspect(error, {
-            depth: 5,
-            colors: false,
-          })
-        );
-        console.error(
-          '=========================================\n'
-        );
-
-        const fallbackMessage = getAiFailureMessage(error);
-
-        try {
-          await message.reply(fallbackMessage);
-          console.log('[Fallback] Pesan kendala berhasil dikirim.');
-        } catch (replyError) {
-          console.error(
-            '[Fallback gagal]',
-            replyError?.message || replyError
-          );
-        }
   }
+
+  const isGroup = message.from.endsWith('@g.us');
+  const mediaDetails = message._data || {};
+
+  return {
+    messageId: typeof id === 'string'
+      ? id
+      : id?._serialized || id?.$1 || null,
+    chatId: message.from,
+    senderId: isGroup
+      ? (message.author || message.from)
+      : message.from,
+    chatType: isGroup ? 'group' : 'private',
+    messageType: message.type,
+    text: message.body?.trim() || '',
+    caption: message.type === 'image'
+      ? (message.body?.trim() || '')
+      : '',
+    timestamp: Number(message.timestamp),
+    group: isGroup
+      ? { senderName: mediaDetails.notifyName || 'Anggota grup' }
+      : null,
+    media: message.hasMedia || message.type === 'image' || message.type === 'ptt'
+      ? {
+          download: () => downloadMediaWithRetry(message),
+          diagnostics: {
+            type: message.type,
+            hasMedia: message.hasMedia,
+            mimetype: mediaDetails.mimetype || 'unknown',
+            size: mediaDetails.size ?? 'unknown',
+            directPath: Boolean(mediaDetails.directPath),
+            mediaKey: Boolean(mediaDetails.mediaKey),
+            encFilehash: Boolean(mediaDetails.encFilehash),
+            mediaStage: mediaDetails.mediaData?.mediaStage || 'unknown',
+          },
+        }
+      : null,
+  };
+}
+
+function handleIncomingMessage(message) {
+  const normalizedMessage = normalizeIncomingMessage(message);
+
+  return messageService.handle(normalizedMessage, {
+    reply: (text) => message.reply(text),
+  });
 }
 
 client.on('message', (message) => {

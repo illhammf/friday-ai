@@ -160,6 +160,24 @@ test('deduplicates message IDs per chat and allows distinct messages', () => {
   assert.equal(deduplicator.claim(otherChat), true);
 });
 
+test('does not process the same duplicate message event twice', async () => {
+  const queue = createMessageQueue();
+  const deduplicator = createMessageDeduplicator();
+  const messageKey = '123@c.us:message-1';
+  let processed = 0;
+  const dispatch = () => {
+    if (!deduplicator.claim(messageKey)) return null;
+    return queue.enqueue('123@c.us', async () => {
+      processed++;
+    });
+  };
+
+  const first = dispatch();
+  assert.equal(dispatch(), null);
+  await first;
+  assert.equal(processed, 1);
+});
+
 test('expires old deduplication keys and bounds retained state', () => {
   let time = 0;
   const expiring = createMessageDeduplicator({
@@ -190,4 +208,20 @@ test('releases message IDs when the queue refuses the message', () => {
   assert.equal(deduplicator.claim('message-1'), true);
   deduplicator.release('message-1');
   assert.equal(deduplicator.claim('message-1'), true);
+});
+
+test('releases a claimed message when the queue is full and accepts a retry', async () => {
+  const queue = createMessageQueue({ maxPending: 0 });
+  const deduplicator = createMessageDeduplicator();
+  const gate = createDeferred();
+  const accepted = queue.enqueue('chat-1', () => gate.promise);
+  const key = 'chat-1:message-2';
+
+  assert.equal(deduplicator.claim(key), true);
+  assert.equal(queue.enqueue('chat-1', async () => 'overflow'), null);
+  deduplicator.release(key);
+  assert.equal(deduplicator.claim(key), true);
+
+  gate.resolve();
+  await accepted;
 });

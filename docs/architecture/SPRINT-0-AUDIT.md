@@ -637,3 +637,17 @@ Suggested bounded first PR:
 This task creates the seam required by the future platform capabilities while
 limiting the risk of a large rewrite. The audit itself does not implement this
 task or any other feature.
+
+## Sprint 1 Implementation Addendum
+
+The Sprint 0 sections above are a snapshot of the repository at audit time.
+Sprint 1 has since extracted the inbound message routing into
+[`src/application/message-service.js`](../../src/application/message-service.js).
+`src/index.js` remains the composition root: it normalizes WhatsApp messages,
+keeps queue and deduplication behavior, adapts media and reply operations, and
+injects concrete AI, persistence, feature, and delivery dependencies.
+Focused transport-free lifecycle tests are in
+[`test/message-service.test.js`](../../test/message-service.test.js), with
+duplicate and queue-overflow characterization in
+[`test/message-queue.test.js`](../../test/message-queue.test.js). The database
+schema and runtime dependencies remain unchanged.
