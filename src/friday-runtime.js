@@ -29,6 +29,8 @@ import { isSocialVideoDownloadRequest } from './video/video-download-request.js'
 import { getVideoDownloadFailureMessage } from './video/video-download-failure.js';
 import { formatWhatsAppMessage } from './whatsapp/format-message.js';
 import { downloadMediaWithRetry } from './whatsapp/download-media.js';
+import { createMemoryService } from './application/memory-service.js';
+import { createMemoryRepository } from './database/memory-repository.js';
 import {
   handleMemoryCommand,
   getMemoryInstruction,
@@ -232,7 +234,7 @@ function logDivider() {
     sharedGroupSession = null,
     senderName = 'Pengguna',
     image,
-  }, database) {
+  }, database, memoryService) {
     // Tentukan jenis percakapan.
     const isGroup = Boolean(sharedGroupSession);
 
@@ -245,7 +247,7 @@ function logDivider() {
     const history = database.loadHistory(activeSession, 10);
     const userMemories = isGroup
       ? []
-      : database.loadUserMemories(privateSession);
+      : memoryService.retrieve(privateSession, question);
 
     // Identitas pengirim hanya ditambahkan pada pesan grup.
     const userMessage = isGroup
@@ -344,6 +346,7 @@ let fridayReadyAt = 0;
 let client;
 let whatsappAdapters;
 let databaseOperations;
+let memoryService;
 
 function configureClientEvents(clientInstance) {
   clientInstance.on('qr', (qr) => {
@@ -420,10 +423,10 @@ const messageService = createMessageService({
       text,
       sessionId,
       {
-        add: (...args) => databaseOperations.saveUserMemory(...args),
-        list: (...args) => databaseOperations.loadUserMemories(...args),
-        delete: (...args) => databaseOperations.deleteUserMemory(...args),
-        clear: (...args) => databaseOperations.clearUserMemories(...args),
+        add: (...args) => memoryService.add(...args),
+        list: (...args) => memoryService.list(...args),
+        delete: (...args) => memoryService.delete(...args),
+        clear: (...args) => memoryService.clear(...args),
       },
     ),
   },
@@ -458,7 +461,7 @@ const messageService = createMessageService({
     getFailureMessage: getImageGenerationFailureMessage,
   },
   assistant: {
-    ask: (input) => askFriday(input, databaseOperations),
+    ask: (input) => askFriday(input, databaseOperations, memoryService),
     getFailureMessage: getAiFailureMessage,
   },
   audio: {
@@ -509,6 +512,9 @@ function registerMessageHandler(clientInstance) {
 const application = createApplication({
   openDatabase: () => {
     databaseOperations = initializeDefaultDatabase();
+    memoryService = createMemoryService({
+      repository: createMemoryRepository(databaseOperations),
+    });
     return databaseOperations;
   },
   createClient: async () => {

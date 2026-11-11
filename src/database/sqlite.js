@@ -45,16 +45,47 @@ export function createDatabase({
     `);
 
     const insertMemory = db.prepare(`
-      INSERT OR IGNORE INTO user_memories (session_id, content)
-      VALUES (?, ?)
+      INSERT OR IGNORE INTO user_memories
+        (session_id, category, content, source, updated_at)
+      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
     `);
 
     const getMemories = db.prepare(`
-      SELECT id, content, created_at
+      SELECT id, category, content, source, created_at, updated_at
       FROM user_memories
       WHERE session_id = ?
       ORDER BY id ASC
     `);
+
+    function searchUserMemories(sessionId, terms, limit) {
+      ensureOpen();
+      const uniqueTerms = [...new Set(
+        (Array.isArray(terms) ? terms : [])
+          .filter((term) => typeof term === 'string' && term.trim())
+          .map((term) => term.trim()),
+      )];
+      if (uniqueTerms.length === 0 || !Number.isInteger(limit) || limit <= 0) {
+        return [];
+      }
+
+      const conditions = uniqueTerms
+        .map(() => '(content LIKE ? ESCAPE \'\\\' OR category LIKE ? ESCAPE \'\\\')')
+        .join(' OR ');
+      const statement = db.prepare(`
+        SELECT id, category, content, source, created_at, updated_at
+        FROM user_memories
+        WHERE session_id = ? AND (${conditions})
+        ORDER BY id ASC
+        LIMIT ?
+      `);
+      const parameters = [sessionId];
+      for (const term of uniqueTerms) {
+        const escaped = term.replace(/[\\%_]/g, '\\$&');
+        parameters.push(`%${escaped}%`, `%${escaped}%`);
+      }
+      parameters.push(limit);
+      return statement.all(...parameters);
+    }
 
     const deleteMemoryById = db.prepare(`
       DELETE FROM user_memories
@@ -96,8 +127,9 @@ export function createDatabase({
             parts: [{ text: content }],
           }));
       },
-      saveUserMemory(sessionId, content, maxEntries) {
+      saveUserMemory(sessionId, content, maxEntries, metadata = {}) {
         ensureOpen();
+        metadata ||= {};
         const existing = getMemories.all(sessionId);
 
         if (
@@ -112,7 +144,14 @@ export function createDatabase({
           return { added: false, limitReached: true };
         }
 
-        const result = insertMemory.run(sessionId, content);
+        const category = metadata.category || 'fact';
+        const source = metadata.source || 'explicit';
+        const result = insertMemory.run(
+          sessionId,
+          category,
+          content,
+          source,
+        );
         return {
           added: result.changes > 0,
           limitReached: false,
@@ -121,6 +160,9 @@ export function createDatabase({
       loadUserMemories(sessionId) {
         ensureOpen();
         return getMemories.all(sessionId);
+      },
+      searchUserMemories(sessionId, terms, limit) {
+        return searchUserMemories(sessionId, terms, limit);
       },
       deleteUserMemory(sessionId, memoryId) {
         ensureOpen();

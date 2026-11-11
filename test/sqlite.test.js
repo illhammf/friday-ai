@@ -338,6 +338,16 @@ test('importing entry point and application modules starts no external integrati
     const messageServiceModule = pathToFileURL(
       join(repositoryRoot, 'src', 'application', 'message-service.js'),
     ).href;
+    const memoryModules = [
+      'application/memory-service.js',
+      'database/memory-repository.js',
+      'database/migrations/index.js',
+      'ai/memory-policy.js',
+      'ai/memory-retriever.js',
+      'ai/user-memory.js',
+    ].map((modulePath) => pathToFileURL(
+      join(repositoryRoot, 'src', modulePath),
+    ).href);
     const { spawnSync } = await import('node:child_process');
     const result = spawnSync(
       process.execPath,
@@ -348,6 +358,7 @@ test('importing entry point and application modules starts no external integrati
         entryPoint,
         lifecycleModule,
         messageServiceModule,
+        ...memoryModules,
       ],
       {
         cwd: directory,

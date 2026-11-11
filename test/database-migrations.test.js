@@ -71,6 +71,7 @@ test('fresh database runs the baseline migration and initializes the existing sc
         ({ version, name }) => ({ version, name }),
       ), [
         { version: '001', name: 'initialize-existing-schema' },
+        { version: '002', name: 'structure-user-memories' },
       ]);
       database.saveMessage('private:user', 'user', 'fresh history');
       assert.deepEqual(database.loadHistory('private:user'), [
@@ -83,7 +84,7 @@ test('fresh database runs the baseline migration and initializes the existing sc
   });
 });
 
-test('existing database with the exact legacy schema is adopted without recreating it', async () => {
+test('existing database with the exact legacy schema is adopted then upgraded additively', async () => {
   await withTemporaryDirectory(async (directory) => {
     const dbPath = join(directory, 'legacy.sqlite');
     const legacy = new DatabaseSync(dbPath);
@@ -96,11 +97,22 @@ test('existing database with the exact legacy schema is adopted without recreati
 
     const migrated = new DatabaseSync(dbPath);
     try {
-      assert.deepEqual(readApplicationSchema(migrated), before);
+      const after = readApplicationSchema(migrated);
+      assert.deepEqual(
+        after.filter(({ name }) => name !== 'user_memories'),
+        before.filter(({ name }) => name !== 'user_memories'),
+      );
+      const memoryTable = after.find(
+        ({ type, name }) => type === 'table' && name === 'user_memories',
+      );
+      assert.match(memoryTable.sql, /category TEXT NOT NULL DEFAULT 'fact'/);
+      assert.match(memoryTable.sql, /source TEXT NOT NULL DEFAULT 'legacy'/);
+      assert.match(memoryTable.sql, /updated_at TEXT NOT NULL DEFAULT ''/);
       assert.deepEqual(readMigrationRows(migrated).map(
         ({ version, name }) => ({ version, name }),
       ), [
         { version: '001', name: 'initialize-existing-schema' },
+        { version: '002', name: 'structure-user-memories' },
       ]);
     } finally {
       migrated.close();
@@ -387,6 +399,21 @@ test('baseline adoption preserves existing user memories exactly', async () => {
         SELECT id, session_id, content, created_at
         FROM user_memories ORDER BY id
       `).all(), before);
+      assert.deepEqual(
+        migrated.prepare(`
+          SELECT category, source, updated_at
+          FROM user_memories ORDER BY id
+        `).all().map(({ category, source, updated_at }) => ({
+          category,
+          source,
+          updated_at,
+        })),
+        [{
+          category: 'fact',
+          source: 'legacy',
+          updated_at: '2024-02-03 04:05:06',
+        }],
+      );
     } finally {
       migrated.close();
     }
@@ -432,8 +459,8 @@ test('separate database instances keep migration metadata and data isolated', as
     const firstDb = new DatabaseSync(join(directory, 'first.sqlite'));
     const secondDb = new DatabaseSync(join(directory, 'second.sqlite'));
     try {
-      assert.equal(readMigrationRows(firstDb).length, 1);
-      assert.equal(readMigrationRows(secondDb).length, 1);
+      assert.equal(readMigrationRows(firstDb).length, 2);
+      assert.equal(readMigrationRows(secondDb).length, 2);
       assert.deepEqual(
         firstDb.prepare('SELECT content FROM messages')
           .all()
