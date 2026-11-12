@@ -58,7 +58,12 @@ test('returns normal text and provides registry declarations through the generat
     },
   });
 
-  assert.equal(await orchestrator.run(input), 'Hello back.');
+  const result = await orchestrator.run(input);
+  assert.equal(result.text, 'Hello back.');
+  assert.equal(result.status, 'succeeded');
+  assert.equal(result.executionProgress.state, 'not_started');
+  assert.equal(result.executionProgress.hasExecutionStarted, false);
+  assert.equal(result.retrySafety.safeToRetry, true);
   assert.equal(request.input, input);
   assert.equal(request.tools[0].name, 'lookup_data');
   assert.deepEqual(Object.keys(request.tools[0]).sort(), [
@@ -87,10 +92,14 @@ test('executes a successful tool through the executor and returns its function r
     },
   });
 
-  assert.equal(
-    await orchestrator.run({ prompt: 'lookup' }, { authorizedTools: ['lookup_data'] }),
-    'Found the value.',
+  const result = await orchestrator.run(
+    { prompt: 'lookup' },
+    { authorizedTools: ['lookup_data'] },
   );
+  assert.equal(result.text, 'Found the value.');
+  assert.equal(result.executionProgress.hasExecutionStarted, true);
+  assert.equal(result.executionProgress.calls[0].state, 'succeeded');
+  assert.equal(result.retrySafety.safeToRetry, false);
   assert.deepEqual(requests[1].functionResponses, [{
     round: 1,
     call: {
@@ -129,7 +138,12 @@ test('executes multiple calls in order and returns every function response', asy
     },
   });
 
-  assert.equal(await orchestrator.run('input'), 'Both done.');
+  const result = await orchestrator.run('input');
+  assert.equal(result.text, 'Both done.');
+  assert.deepEqual(
+    result.executionProgress.calls.map(({ state }) => state),
+    ['succeeded', 'succeeded'],
+  );
   assert.deepEqual(calls.map(([name, args]) => [name, args]), [
     ['lookup_data', { value: 1 }],
     ['lookup_data', { value: 2 }],
@@ -159,7 +173,12 @@ test('supports multiple tool-call rounds and sends accumulated responses', async
     },
   });
 
-  assert.equal(await orchestrator.run('input'), 'Finished.');
+  const result = await orchestrator.run('input');
+  assert.equal(result.text, 'Finished.');
+  assert.deepEqual(
+    result.executionProgress.calls.map(({ state }) => state),
+    ['succeeded', 'succeeded'],
+  );
   assert.equal(calls.length, 2);
   assert.deepEqual(
     requests[2].functionResponses.map(({ id }) => id),
@@ -187,7 +206,11 @@ test('returns unknown-tool errors to the generator without calling the executor'
     },
   });
 
-  assert.equal(await orchestrator.run('input'), 'Tool unavailable.');
+  const result = await orchestrator.run('input');
+  assert.equal(result.text, 'Tool unavailable.');
+  assert.equal(result.executionProgress.calls[0].state, 'failed');
+  assert.equal(result.executionProgress.hasExecutionStarted, false);
+  assert.equal(result.retrySafety.safeToRetry, true);
   assert.deepEqual(calls, []);
 });
 
@@ -226,7 +249,11 @@ test('normalizes executor failures without leaking internal details', async () =
     ['INTERNAL_FAILURE', 'TOOL_EXECUTION_FAILED', 'Tool execution failed.'],
   ]) {
     const { executor } = createFakeExecutor(async () => {
-      throw Object.assign(new Error('private stack or secret'), { code });
+      throw Object.assign(new Error('private stack or secret'), {
+        code,
+        executionStarted: ['TOOL_TIMEOUT', 'INTERNAL_FAILURE'].includes(code),
+        outcomeUnknown: code === 'TOOL_TIMEOUT',
+      });
     });
     let invocation = 0;
     const orchestrator = createToolOrchestrator({
@@ -246,7 +273,24 @@ test('normalizes executor failures without leaking internal details', async () =
         return { text: 'Handled.' };
       },
     });
-    assert.equal(await orchestrator.run('input'), 'Handled.');
+    if (code === 'TOOL_TIMEOUT') {
+      await assert.rejects(orchestrator.run('input'), (error) =>
+        error.code === 'TOOL_OUTCOME_UNKNOWN' &&
+        error.kind === 'tool_execution' &&
+        error.executionProgress.hasUncertainOutcome &&
+        error.executionProgress.calls[0].state === 'unknown' &&
+        error.retrySafety.safeToRetry === false,
+      );
+      assert.equal(invocation, 1);
+    } else {
+      const result = await orchestrator.run('input');
+      assert.equal(result.text, 'Handled.');
+      assert.equal(result.executionProgress.calls[0].state, 'failed');
+      assert.equal(
+        result.retrySafety.safeToRetry,
+        !['INTERNAL_FAILURE'].includes(code),
+      );
+    }
   }
 });
 
@@ -263,8 +307,11 @@ test('normalizes generator failures and invalid output', async () => {
   await assert.rejects(
     failing.run('input'),
     (error) => error.code === 'GENERATOR_FAILED' &&
-      error.message === 'The response generator failed.' &&
-      !error.message.includes('credentials'),
+    error.kind === 'provider' &&
+    error.message === 'The response generator failed.' &&
+    !error.message.includes('credentials') &&
+    error.executionProgress.hasExecutionStarted === false &&
+    error.retrySafety.safeToRetry === true,
   );
 
   const invalidOutput = createToolOrchestrator({
@@ -274,7 +321,251 @@ test('normalizes generator failures and invalid output', async () => {
       ? { text: 'Handled.' }
       : { functionCalls: [functionCall('invalid-output')] },
   });
-  assert.equal(await invalidOutput.run('input'), 'Handled.');
+  const result = await invalidOutput.run('input');
+  assert.equal(result.text, 'Handled.');
+  assert.equal(result.executionProgress.calls[0].state, 'failed');
+});
+
+test('preserves successful tool results when a later provider generation fails', async () => {
+  const registry = createRegistry();
+  let executions = 0;
+  const executor = createToolExecutor({ registry });
+  let generations = 0;
+  const orchestrator = createToolOrchestrator({
+    registry,
+    executor: {
+      async execute(...args) {
+        executions += 1;
+        return executor.execute(...args);
+      },
+    },
+    createRequestId: () => 'trusted-request-1',
+    generator: async () => {
+      generations += 1;
+      if (generations === 1) {
+        return { functionCalls: [functionCall('provider-call-1')] };
+      }
+      throw new Error('provider went away');
+    },
+  });
+
+  await assert.rejects(orchestrator.run('input', {
+    authorizedTools: ['lookup_data'],
+  }), (error) => {
+    assert.equal(error.code, 'GENERATOR_FAILED');
+    assert.equal(error.kind, 'provider');
+    assert.equal(error.executionProgress.requestId, 'trusted-request-1');
+    assert.equal(error.executionProgress.calls[0].providerCallId, 'provider-call-1');
+    assert.equal(error.executionProgress.calls[0].state, 'succeeded');
+    assert.deepEqual(error.functionResponses[0].result, { value: 'ok' });
+    assert.equal(error.retrySafety.safeToRetry, false);
+    return true;
+  });
+  assert.equal(generations, 2);
+  assert.equal(executions, 1);
+});
+
+test('reports executor schema validation failure before dispatch as retry-safe', async () => {
+  const registry = createToolRegistry();
+  registry.register({
+    name: 'lookup_data',
+    description: 'Read an allowlisted value.',
+    inputSchema: {
+      type: 'object',
+      properties: { query: { type: 'string', maxLength: 10 } },
+      required: ['query'],
+      additionalProperties: false,
+    },
+    category: 'read_only',
+    handler: async () => {
+      throw new Error('must not execute');
+    },
+  });
+  const executor = createToolExecutor({ registry });
+  let invocation = 0;
+  const orchestrator = createToolOrchestrator({
+    registry,
+    executor,
+    generator: async (request) => {
+      invocation += 1;
+      if (invocation === 1) {
+        return {
+          functionCalls: [functionCall('bad-args', 'lookup_data', { unexpected: true })],
+        };
+      }
+      assert.equal(request.functionResponses[0].error.code, 'TOOL_ARGUMENTS_INVALID');
+      return { text: 'Invalid call handled.' };
+    },
+  });
+
+  const result = await orchestrator.run('input', {
+    authorizedTools: ['lookup_data'],
+  });
+  assert.equal(result.executionProgress.calls[0].state, 'failed');
+  assert.equal(result.executionProgress.calls[0].executionStarted, false);
+  assert.equal(result.retrySafety.safeToRetry, true);
+});
+
+test('records a started handler failure as failed and unsafe to replay', async () => {
+  const registry = createRegistry({
+    handler: async () => {
+      throw new Error('private handler failure');
+    },
+  });
+  const executor = createToolExecutor({ registry });
+  let invocation = 0;
+  const orchestrator = createToolOrchestrator({
+    registry,
+    executor,
+    generator: async (request) => {
+      invocation += 1;
+      if (invocation === 1) {
+        return { functionCalls: [functionCall('failed-call')] };
+      }
+      assert.deepEqual(request.functionResponses[0].error, {
+        code: 'TOOL_EXECUTION_FAILED',
+        message: 'Tool execution failed.',
+      });
+      return { text: 'Failure handled.' };
+    },
+  });
+
+  const result = await orchestrator.run('input', {
+    authorizedTools: ['lookup_data'],
+  });
+  assert.equal(result.executionProgress.calls[0].state, 'failed');
+  assert.equal(result.executionProgress.calls[0].executionStarted, true);
+  assert.equal(result.retrySafety.safeToRetry, false);
+  assert.equal(JSON.stringify(result).includes('private handler failure'), false);
+});
+
+test('marks timed-out execution unknown and does not ask the generator again', async () => {
+  const registry = createRegistry({
+    handler: () => new Promise(() => {}),
+  });
+  const executor = createToolExecutor({ registry, timeoutMs: 10 });
+  let generations = 0;
+  const orchestrator = createToolOrchestrator({
+    registry,
+    executor,
+    generator: async () => {
+      generations += 1;
+      return { functionCalls: [functionCall('timeout-call')] };
+    },
+  });
+
+  await assert.rejects(orchestrator.run('input', {
+    authorizedTools: ['lookup_data'],
+  }), (error) => {
+    assert.equal(error.code, 'TOOL_OUTCOME_UNKNOWN');
+    assert.equal(error.executionProgress.calls[0].state, 'unknown');
+    assert.equal(error.executionProgress.calls[0].executionStarted, true);
+    assert.equal(error.executionProgress.hasUncertainOutcome, true);
+    assert.equal(error.retrySafety.reason, 'execution_outcome_unknown');
+    assert.equal(error.retrySafety.safeToRetry, false);
+    assert.equal(error.functionResponses[0].error.code, 'TOOL_TIMEOUT');
+    return true;
+  });
+  assert.equal(generations, 1);
+});
+
+test('treats an unclassified post-dispatch executor failure as uncertain', async () => {
+  const registry = createRegistry();
+  let generations = 0;
+  const orchestrator = createToolOrchestrator({
+    registry,
+    executor: {
+      async execute(_name, _args, _context, { onStarted }) {
+        onStarted();
+        throw new Error('completion cannot be confirmed');
+      },
+    },
+    generator: async () => {
+      generations += 1;
+      return { functionCalls: [functionCall('uncertain-call')] };
+    },
+  });
+
+  await assert.rejects(orchestrator.run('input'), (error) =>
+    error.code === 'TOOL_OUTCOME_UNKNOWN' &&
+    error.executionProgress.calls[0].state === 'unknown' &&
+    error.retrySafety.safeToRetry === false,
+  );
+  assert.equal(generations, 1);
+});
+
+test('rejects a repeated provider call ID across rounds without executing it twice', async () => {
+  const registry = createRegistry();
+  const { executor, calls } = createFakeExecutor();
+  let invocation = 0;
+  const orchestrator = createToolOrchestrator({
+    registry,
+    executor,
+    generator: async () => {
+      invocation += 1;
+      if (invocation === 1) {
+        return { functionCalls: [functionCall('same-id')] };
+      }
+      return { functionCalls: [functionCall('same-id')] };
+    },
+  });
+
+  await assert.rejects(orchestrator.run('input'), (error) =>
+    error.code === 'DUPLICATE_FUNCTION_CALL_ID' &&
+    error.executionProgress.calls.length === 1 &&
+    error.executionProgress.calls[0].state === 'succeeded' &&
+    error.functionResponses.length === 1 &&
+    error.retrySafety.safeToRetry === false,
+  );
+  assert.equal(calls.length, 1);
+});
+
+test('keeps separate progress for multiple calls and identifies validated undispatched calls', async () => {
+  const registry = createRegistry();
+  let invocation = 0;
+  const executor = {
+    async execute(name, args, context, hooks) {
+      if (args.fail) {
+        hooks.onStarted();
+        throw Object.assign(new Error('failure'), {
+          code: 'TOOL_EXECUTION_FAILED',
+          executionStarted: true,
+        });
+      }
+      hooks.onStarted();
+      return { value: 'ok' };
+    },
+  };
+  const orchestrator = createToolOrchestrator({
+    registry,
+    executor,
+    maxCallsPerRound: 2,
+    generator: async () => {
+      invocation += 1;
+      if (invocation === 1) {
+        return {
+          functionCalls: [
+            functionCall('first', 'lookup_data', {}),
+            functionCall('second', 'lookup_data', { fail: true }),
+          ],
+        };
+      }
+      return { text: 'Handled.' };
+    },
+  });
+
+  const result = await orchestrator.run('input');
+  assert.deepEqual(
+    result.executionProgress.calls.map(({ providerCallId, state }) => ({
+      providerCallId,
+      state,
+    })),
+    [
+      { providerCallId: 'first', state: 'succeeded' },
+      { providerCallId: 'second', state: 'failed' },
+    ],
+  );
+  assert.equal(result.retrySafety.safeToRetry, false);
 });
 
 test('enforces round, per-round, and total call limits before execution', async () => {
@@ -354,7 +645,10 @@ test('never invokes the executor for an unregistered tool', async () => {
       : { functionCalls: [functionCall('not-registered', 'unregistered_tool')] },
   });
 
-  assert.equal(await orchestrator.run('input'), 'Rejected.');
+  const result = await orchestrator.run('input');
+  assert.equal(result.text, 'Rejected.');
+  assert.equal(result.executionProgress.calls[0].state, 'failed');
+  assert.equal(result.retrySafety.safeToRetry, true);
   assert.equal(executorCalls, 0);
 });
 

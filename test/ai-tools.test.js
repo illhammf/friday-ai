@@ -250,6 +250,7 @@ test('executor validates, authorizes, and executes only registered tools', async
     },
   }));
   const executor = createToolExecutor({ registry });
+  let started = 0;
 
   assert.deepEqual(await executor.execute(
     'read_status',
@@ -259,7 +260,9 @@ test('executor validates, authorizes, and executes only registered tools', async
       chatType: 'private',
       privateSessionId: 'private:user',
     },
+    { onStarted: () => { started += 1; } },
   ), { result: 'found status' });
+  assert.equal(started, 1);
   assert.equal(Object.isFrozen(received[0].context), true);
   assert.equal(received[0].context.privateSessionId, 'private:user');
   assert.equal('authorizedTools' in received[0].context, false);
@@ -271,9 +274,11 @@ test('executor validates, authorizes, and executes only registered tools', async
   await assert.rejects(
     executor.execute('read_status', { query: 'x'.repeat(21) }, {
       authorizedTools: ['read_status'],
-    }),
-    { code: 'TOOL_ARGUMENTS_INVALID' },
+    }, { onStarted: () => { started += 1; } }),
+    (error) => error.code === 'TOOL_ARGUMENTS_INVALID' &&
+      error.executionStarted === false,
   );
+  assert.equal(started, 1);
 });
 
 test('executor denies unauthorized tools without invoking handlers', async () => {
@@ -292,6 +297,24 @@ test('executor denies unauthorized tools without invoking handlers', async () =>
     { code: 'TOOL_PERMISSION_DENIED' },
   );
   assert.equal(executions, 0);
+});
+
+test('executor reports invalid trusted context as a pre-dispatch denial', async () => {
+  const registry = createToolRegistry();
+  registry.register(createDefinition());
+  const executor = createToolExecutor({ registry });
+  let started = false;
+  await assert.rejects(
+    executor.execute(
+      'read_status',
+      {},
+      'untrusted-shape',
+      { onStarted: () => { started = true; } },
+    ),
+    (error) => error.code === 'TOOL_PERMISSION_DENIED' &&
+      error.executionStarted === false,
+  );
+  assert.equal(started, false);
 });
 
 test('executor normalizes handler errors without exposing stacks or secrets', async () => {
@@ -369,6 +392,8 @@ test('executor reports timeout without claiming to cancel a running handler', as
     executor.execute('read_status', {}, { authorizedTools: ['read_status'] }),
     (error) => error instanceof ToolExecutionError &&
       error.code === 'TOOL_TIMEOUT' &&
+      error.executionStarted === true &&
+      error.outcomeUnknown === true &&
       /may still be running/.test(error.message),
   );
   assert.equal(completed, false);

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 const HARD_LIMITS = Object.freeze({
   maxToolRounds: 2,
   maxCallsPerRound: 3,
@@ -15,11 +17,83 @@ const ERROR_DETAILS = Object.freeze({
 });
 
 export class ToolOrchestrationError extends Error {
-  constructor(code, message) {
+  constructor(
+    code,
+    message,
+    {
+      kind = 'orchestration',
+      executionProgress = null,
+      functionResponses = [],
+      retrySafety = null,
+    } = {},
+  ) {
     super(message);
     this.name = 'ToolOrchestrationError';
     this.code = code;
+    this.kind = kind;
+    this.executionProgress = executionProgress;
+    this.functionResponses = functionResponses;
+    this.retrySafety = retrySafety;
   }
+}
+
+function snapshotProgress(requestId, calls) {
+  const callRecords = calls.map((call) => {
+    const record = {
+      sequence: call.sequence,
+      round: call.round,
+      providerCallId: call.providerCallId,
+      toolName: call.toolName,
+      state: call.state,
+      executionStarted: call.executionStarted,
+    };
+    if (call.responseIndex !== undefined) {
+      record.functionResponseIndex = call.responseIndex;
+    }
+    if (call.error) record.error = Object.freeze({ ...call.error });
+    return Object.freeze(record);
+  });
+  const hasExecutionStarted = callRecords.some((call) => call.executionStarted);
+  const hasUncertainOutcome = callRecords.some((call) => call.state === 'unknown');
+  const retrySafety = Object.freeze({
+    safeToRetry: !hasExecutionStarted && !hasUncertainOutcome,
+    reason: hasUncertainOutcome
+      ? 'execution_outcome_unknown'
+      : hasExecutionStarted
+        ? 'tool_execution_started'
+        : 'no_tool_execution_started',
+  });
+  return Object.freeze({
+    requestId,
+    state: hasUncertainOutcome
+      ? 'unknown'
+      : callRecords.some((call) => call.state === 'running')
+        ? 'running'
+        : callRecords.length === 0
+          ? 'not_started'
+          : !hasExecutionStarted && callRecords.every((call) => call.state === 'validated')
+            ? 'validated'
+            : callRecords.every((call) => call.state === 'succeeded')
+              ? 'succeeded'
+              : callRecords.some((call) => call.state === 'failed')
+                ? 'failed'
+                : 'not_started',
+    hasExecutionStarted,
+    hasUncertainOutcome,
+    calls: Object.freeze(callRecords),
+    retrySafety,
+  });
+}
+
+function orchestrationFailure(code, message, kind, requestId, progress, responses) {
+  const executionProgress = snapshotProgress(requestId, progress);
+  const functionResponses = Object.freeze([...responses]);
+  return new ToolOrchestrationError(code, message, {
+    kind,
+    executionProgress,
+    functionResponses,
+    retrySafety: executionProgress.retrySafety,
+  });
 }
 
 function assertLimit(name, value) {
@@ -258,6 +332,7 @@ export function createToolOrchestrator({
   generator,
   executor,
   registry,
+  createRequestId = randomUUID,
   maxToolRounds = HARD_LIMITS.maxToolRounds,
   maxCallsPerRound = HARD_LIMITS.maxCallsPerRound,
   maxTotalCalls = HARD_LIMITS.maxTotalCalls,
@@ -275,6 +350,9 @@ export function createToolOrchestrator({
   ) {
     throw new TypeError('A tool registry is required.');
   }
+  if (typeof createRequestId !== 'function') {
+    throw new TypeError('createRequestId must be a function.');
+  }
   assertLimit('maxToolRounds', maxToolRounds);
   assertLimit('maxCallsPerRound', maxCallsPerRound);
   assertLimit('maxTotalCalls', maxTotalCalls);
@@ -286,8 +364,17 @@ export function createToolOrchestrator({
 
   return Object.freeze({
     async run(input, trustedContext = {}) {
+      const requestId = createRequestId();
+      if (
+        typeof requestId !== 'string' ||
+        !requestId.trim() ||
+        requestId.length > 128
+      ) {
+        throw new TypeError('createRequestId must return a non-empty string of at most 128 characters.');
+      }
       const knownCallIds = new Set();
       const functionResponses = [];
+      const progress = [];
       let completedRounds = 0;
       let totalCalls = 0;
 
@@ -300,45 +387,108 @@ export function createToolOrchestrator({
             functionResponses: Object.freeze([...functionResponses]),
           });
         } catch {
-          throw new ToolOrchestrationError(
+          throw orchestrationFailure(
             'GENERATOR_FAILED',
             'The response generator failed.',
+            'provider',
+            requestId,
+            progress,
+            functionResponses,
           );
         }
 
-        const normalized = normalizeGeneratorResponse(response);
-        if (normalized.type === 'text') return normalized.text;
+        let normalized;
+        try {
+          normalized = normalizeGeneratorResponse(response);
+        } catch (error) {
+          throw orchestrationFailure(
+            error.code || 'INVALID_GENERATOR_RESPONSE',
+            error.message || 'Generator response is invalid.',
+            'protocol',
+            requestId,
+            progress,
+            functionResponses,
+          );
+        }
+        if (normalized.type === 'text') {
+          const executionProgress = snapshotProgress(requestId, progress);
+          return Object.freeze({
+            status: 'succeeded',
+            text: normalized.text,
+            executionProgress,
+            functionResponses: Object.freeze([...functionResponses]),
+            retrySafety: executionProgress.retrySafety,
+          });
+        }
 
-        const calls = normalizeCalls(normalized.calls, knownCallIds);
+        let calls;
+        try {
+          calls = normalizeCalls(normalized.calls, knownCallIds);
+        } catch (error) {
+          throw orchestrationFailure(
+            error.code || 'INVALID_FUNCTION_CALL',
+            error.message || 'Function call is invalid.',
+            'validation',
+            requestId,
+            progress,
+            functionResponses,
+          );
+        }
+        const nextRound = completedRounds + 1;
+        const roundProgress = calls.map((call, index) => ({
+          sequence: progress.length + index + 1,
+          round: nextRound,
+          providerCallId: call.id,
+          toolName: call.name,
+          state: 'validated',
+          executionStarted: false,
+        }));
         if (completedRounds >= maxToolRounds) {
-          throw new ToolOrchestrationError(
+          progress.push(...roundProgress);
+          throw orchestrationFailure(
             'TOOL_ROUND_LIMIT',
             'The maximum number of tool-call rounds was reached.',
+            'orchestration',
+            requestId,
+            progress,
+            functionResponses,
           );
         }
         if (calls.length > maxCallsPerRound) {
-          throw new ToolOrchestrationError(
+          progress.push(...roundProgress);
+          throw orchestrationFailure(
             'TOOL_CALL_LIMIT',
             'The maximum number of tool calls per round was reached.',
+            'orchestration',
+            requestId,
+            progress,
+            functionResponses,
           );
         }
         if (totalCalls + calls.length > maxTotalCalls) {
-          throw new ToolOrchestrationError(
+          progress.push(...roundProgress);
+          throw orchestrationFailure(
             'TOOL_CALL_LIMIT',
             'The maximum number of tool calls was reached.',
+            'orchestration',
+            requestId,
+            progress,
+            functionResponses,
           );
         }
 
         completedRounds += 1;
         totalCalls += calls.length;
+        progress.push(...roundProgress);
         const roundResponses = [];
 
-        for (const call of calls) {
+        for (const [callIndex, call] of calls.entries()) {
           const callRecord = deepFreeze({
             id: call.id,
             name: call.name,
             arguments: call.arguments,
           });
+          const callProgress = roundProgress[callIndex];
           const responseBase = {
             round: completedRounds,
             call: callRecord,
@@ -346,6 +496,12 @@ export function createToolOrchestrator({
             name: call.name,
           };
           if (!registry.has(call.name)) {
+            callProgress.state = 'failed';
+            callProgress.error = {
+              code: 'TOOL_NOT_FOUND',
+              message: ERROR_DETAILS.TOOL_NOT_FOUND,
+            };
+            callProgress.responseIndex = functionResponses.length + roundResponses.length;
             roundResponses.push(Object.freeze({
               ...responseBase,
               error: Object.freeze({
@@ -357,13 +513,25 @@ export function createToolOrchestrator({
           }
 
           try {
+            const markStarted = () => {
+              callProgress.state = 'running';
+              callProgress.executionStarted = true;
+            };
             const result = await executor.execute(
               call.name,
               call.arguments,
               trustedContext,
+              { onStarted: markStarted },
             );
+            if (!callProgress.executionStarted) markStarted();
             const safeResult = cloneJson(result);
             if (safeResult === null && result !== null) {
+              callProgress.state = 'failed';
+              callProgress.error = {
+                code: 'TOOL_OUTPUT_INVALID',
+                message: ERROR_DETAILS.TOOL_OUTPUT_INVALID,
+              };
+              callProgress.responseIndex = functionResponses.length + roundResponses.length;
               roundResponses.push(Object.freeze({
                 ...responseBase,
                 error: Object.freeze({
@@ -372,16 +540,55 @@ export function createToolOrchestrator({
                 }),
               }));
             } else {
+              callProgress.state = 'succeeded';
+              callProgress.responseIndex = functionResponses.length + roundResponses.length;
               roundResponses.push(Object.freeze({
                 ...responseBase,
                 result: deepFreeze(safeResult),
               }));
             }
           } catch (error) {
+            const errorCode = Object.hasOwn(ERROR_DETAILS, error?.code)
+              ? error.code
+              : 'TOOL_EXECUTION_FAILED';
+            const hasExecutionMetadata =
+              typeof error?.executionStarted === 'boolean';
+            if (error?.executionStarted === true) {
+              callProgress.executionStarted = true;
+              if (callProgress.state === 'validated') callProgress.state = 'running';
+            } else if (error?.executionStarted !== false && !callProgress.executionStarted) {
+              callProgress.executionStarted = true;
+              callProgress.state = 'unknown';
+            }
+            if (
+              error?.outcomeUnknown === true ||
+              errorCode === 'TOOL_TIMEOUT' ||
+              (!hasExecutionMetadata && callProgress.executionStarted)
+            ) {
+              callProgress.state = 'unknown';
+            } else {
+              callProgress.state = 'failed';
+            }
+            callProgress.error = {
+              code: errorCode,
+              message: ERROR_DETAILS[errorCode],
+            };
+            callProgress.responseIndex = functionResponses.length + roundResponses.length;
             roundResponses.push(Object.freeze({
               ...responseBase,
               error: Object.freeze(normalizeToolError(error)),
             }));
+            if (callProgress.state === 'unknown') {
+              functionResponses.push(...roundResponses);
+              throw orchestrationFailure(
+                'TOOL_OUTCOME_UNKNOWN',
+                'Tool execution timed out or its completion could not be confirmed.',
+                'tool_execution',
+                requestId,
+                progress,
+                functionResponses,
+              );
+            }
           }
         }
 

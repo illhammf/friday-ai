@@ -6,10 +6,12 @@ const DEFAULT_MAX_ARGUMENT_BYTES = 4096;
 const DEFAULT_MAX_OUTPUT_BYTES = 8192;
 
 export class ToolExecutionError extends Error {
-  constructor(code, message) {
+  constructor(code, message, { executionStarted = false, outcomeUnknown = false } = {}) {
     super(message);
     this.name = 'ToolExecutionError';
     this.code = code;
+    this.executionStarted = executionStarted;
+    this.outcomeUnknown = outcomeUnknown;
   }
 }
 
@@ -129,7 +131,10 @@ export function createToolExecutor({
   }
 
   return Object.freeze({
-    async execute(name, args, trustedContext = {}) {
+    async execute(name, args, trustedContext = {}, { onStarted } = {}) {
+      if (onStarted !== undefined && typeof onStarted !== 'function') {
+        throw new TypeError('onStarted must be a function.');
+      }
       const tool = registry.get(name);
       if (!tool) {
         throw new ToolExecutionError(
@@ -150,7 +155,15 @@ export function createToolExecutor({
         );
       }
 
-      const safeContext = snapshotTrustedContext(trustedContext);
+      let safeContext;
+      try {
+        safeContext = snapshotTrustedContext(trustedContext);
+      } catch {
+        throw new ToolExecutionError(
+          'TOOL_PERMISSION_DENIED',
+          'Tool permission denied.',
+        );
+      }
       try {
         assertToolPermission(tool, safeContext);
       } catch {
@@ -187,6 +200,7 @@ export function createToolExecutor({
       const safeArguments = freezeArguments(validation.value);
       let timeout;
       let timedOut = false;
+      onStarted?.();
       const handlerPromise = Promise.resolve().then(
         () => tool.handler(safeArguments, handlerContext),
       );
@@ -199,6 +213,7 @@ export function createToolExecutor({
           reject(new ToolExecutionError(
             'TOOL_TIMEOUT',
             'Tool execution timed out; the handler may still be running.',
+            { executionStarted: true, outcomeUnknown: true },
           ));
         }, timeoutMs);
       });
@@ -213,10 +228,17 @@ export function createToolExecutor({
         }
         return serializeOutput(output, maxOutputBytes);
       } catch (error) {
-        if (error instanceof ToolExecutionError) throw error;
+        if (error instanceof ToolExecutionError) {
+          if (error.executionStarted) throw error;
+          throw new ToolExecutionError(error.code, error.message, {
+            executionStarted: true,
+            outcomeUnknown: error.outcomeUnknown,
+          });
+        }
         throw new ToolExecutionError(
           'TOOL_EXECUTION_FAILED',
           'Tool execution failed.',
+          { executionStarted: true },
         );
       } finally {
         if (timeout !== undefined) clearTimer(timeout);

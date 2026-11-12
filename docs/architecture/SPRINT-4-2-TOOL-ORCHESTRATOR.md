@@ -16,8 +16,12 @@ timeouts, and result size limits.
 ## Generator Contract
 
 `createToolOrchestrator({ generator, executor, registry, ...limits })` returns
-an object with `run(input, trustedContext)`. The generator is an injected
-async function:
+an object with `run(input, trustedContext)`. Since Sprint 4.6, successful
+`run()` calls return `{ status, text, executionProgress, functionResponses,
+retrySafety }`, and normalized failures throw `ToolOrchestrationError` with
+the same progress, accumulated responses, and retry-safety metadata. Consumers
+must use this detailed result rather than assuming `run()` returns a string.
+The generator is an injected async function:
 
 ```js
 async function generator({ input, tools, functionResponses }) {
@@ -76,7 +80,8 @@ function response in the provider's required conversation history.
 
 1. Invoke the generator with input, registry declarations, and accumulated
    function responses.
-2. Return trimmed text when the generator returns a valid text-only response.
+2. Return a structured success result with trimmed final text and execution
+   progress when the generator returns a valid text-only response.
 3. Validate a complete batch of function calls, including IDs, names, and
    argument object shape.
 4. Check round and call limits before executing any call in the batch.
@@ -115,10 +120,18 @@ abort signal, as documented in Sprint 4.1.
 
 Generator failures become `GENERATOR_FAILED`; malformed responses and calls
 become `INVALID_GENERATOR_RESPONSE` or `INVALID_FUNCTION_CALL`. Duplicate call
-IDs become `DUPLICATE_FUNCTION_CALL_ID`. Tool-level failures are returned as
-normalized function responses so the generator may produce a final answer.
-Round/call limit failures stop the request with a normalized orchestration
-error. No automatic orchestration retry occurs.
+IDs become `DUPLICATE_FUNCTION_CALL_ID`. Tool-level failures with known
+outcomes are returned as normalized function responses so the generator may
+produce a final answer. A timeout or otherwise uncertain execution outcome
+stops the request rather than issuing another generation. Round/call limit
+failures stop the request with a normalized orchestration error. No automatic
+orchestration retry occurs.
+
+Sprint 4.6 adds progress-state and retry-safety metadata to successful results
+and errors. See
+[`SPRINT-4-6-EXECUTION-PROGRESS-AND-RETRY-SAFETY.md`](./SPRINT-4-6-EXECUTION-PROGRESS-AND-RETRY-SAFETY.md)
+for the state model and limitations. These per-request records do not provide
+cross-request idempotency or exactly-once execution.
 
 The orchestrator requires the registry and executor interfaces but does not
 reimplement their security checks. The registry prevents unregistered names
