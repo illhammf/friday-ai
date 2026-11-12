@@ -12,6 +12,7 @@ const MAX_TOTAL_RESPONSES = 6;
 const MAX_ARGUMENT_BYTES = 4096;
 const MAX_RESULT_BYTES = 8192;
 const MAX_TEXT_BYTES = 32 * 1024;
+const MAX_FUNCTION_HISTORY_BYTES = 64 * 1024;
 const TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 const SAFE_TOOL_ERRORS = Object.freeze({
   TOOL_NOT_FOUND: 'Requested tool is not available.',
@@ -287,7 +288,10 @@ function mapInputToContents(input) {
   });
 }
 
-function buildFunctionResponseContents(functionResponses) {
+function buildFunctionResponseContents(
+  functionResponses,
+  maxFunctionHistoryBytes,
+) {
   if (!Array.isArray(functionResponses) || functionResponses.length > MAX_TOTAL_RESPONSES) {
     throw new GeminiToolAdapterError(
       'INVALID_FUNCTION_RESPONSES',
@@ -298,11 +302,22 @@ function buildFunctionResponseContents(functionResponses) {
 
   const rounds = new Map();
   const seenIds = new Set();
+  let previousRound = 0;
+  const nextCallIndexes = new Map();
   for (const item of functionResponses) {
     try {
       const responseItem = readDataRecord(
         item,
-        ['round', 'call', 'id', 'name', 'result', 'error'],
+        [
+          'round',
+          'roundCallIndex',
+          'roundCallCount',
+          'call',
+          'id',
+          'name',
+          'result',
+          'error',
+        ],
         'INVALID_FUNCTION_RESPONSES',
         'Function response',
       );
@@ -316,6 +331,13 @@ function buildFunctionResponseContents(functionResponses) {
         !Number.isInteger(responseItem.round) ||
         responseItem.round < 1 ||
         responseItem.round > 2 ||
+        !Number.isInteger(responseItem.roundCallIndex) ||
+        responseItem.roundCallIndex < 1 ||
+        responseItem.roundCallIndex > MAX_CALLS_PER_RESPONSE ||
+        !Number.isInteger(responseItem.roundCallCount) ||
+        responseItem.roundCallCount < 1 ||
+        responseItem.roundCallCount > MAX_CALLS_PER_RESPONSE ||
+        responseItem.roundCallIndex > responseItem.roundCallCount ||
         typeof responseItem.id !== 'string' ||
         !responseItem.id.trim() ||
         responseItem.id.length > 128 ||
@@ -326,6 +348,18 @@ function buildFunctionResponseContents(functionResponses) {
       ) {
         throw new Error('Invalid function response metadata.');
       }
+      if (
+        responseItem.round < previousRound ||
+        responseItem.round > previousRound + 1
+      ) {
+        throw new Error('Function response rounds are out of order.');
+      }
+      previousRound = responseItem.round;
+      const expectedIndex = nextCallIndexes.get(responseItem.round) ?? 1;
+      if (responseItem.roundCallIndex !== expectedIndex) {
+        throw new Error('Function response call order is invalid.');
+      }
+      nextCallIndexes.set(responseItem.round, expectedIndex + 1);
       const callArguments = cloneJson(
         call.arguments,
         MAX_ARGUMENT_BYTES,
@@ -371,21 +405,28 @@ function buildFunctionResponseContents(functionResponses) {
         };
       }
 
-      const round = rounds.get(responseItem.round) ?? [];
+      const roundEntry = rounds.get(responseItem.round) ?? {
+        expectedCount: responseItem.roundCallCount,
+        calls: [],
+      };
+      if (roundEntry.expectedCount !== responseItem.roundCallCount) {
+        throw new Error('Inconsistent function response batch metadata.');
+      }
       if (seenIds.has(responseItem.id)) {
         throw new Error('Duplicate call ID.');
       }
       seenIds.add(responseItem.id);
-      round.push({
+      roundEntry.calls.push({
         id: responseItem.id,
         name: responseItem.name,
         args: callArguments,
+        callIndex: responseItem.roundCallIndex,
         response,
       });
-      if (round.length > MAX_CALLS_PER_RESPONSE) {
+      if (roundEntry.calls.length > MAX_CALLS_PER_RESPONSE) {
         throw new Error('Too many calls in one round.');
       }
-      rounds.set(responseItem.round, round);
+      rounds.set(responseItem.round, roundEntry);
     } catch (error) {
       if (error instanceof GeminiToolAdapterError) throw error;
       throw new GeminiToolAdapterError(
@@ -396,11 +437,21 @@ function buildFunctionResponseContents(functionResponses) {
   }
 
   const contents = [];
-  for (const [roundNumber, calls] of [...rounds].sort(([a], [b]) => a - b)) {
+  for (const [roundNumber, roundEntry] of rounds) {
+    const { expectedCount, calls } = roundEntry;
     if (roundNumber !== contents.length / 2 + 1) {
       throw new GeminiToolAdapterError(
         'INVALID_FUNCTION_RESPONSES',
         'Function response rounds must be contiguous and ordered.',
+      );
+    }
+    if (
+      calls.length !== expectedCount ||
+      calls.some(({ callIndex }, index) => callIndex !== index + 1)
+    ) {
+      throw new GeminiToolAdapterError(
+        'INVALID_FUNCTION_RESPONSES',
+        'Function response history contains an incomplete call batch.',
       );
     }
     contents.push({
@@ -415,6 +466,15 @@ function buildFunctionResponseContents(functionResponses) {
         functionResponse: { id, name, response },
       })),
     });
+  }
+  if (
+    Buffer.byteLength(JSON.stringify(contents), 'utf8') >
+    maxFunctionHistoryBytes
+  ) {
+    throw new GeminiToolAdapterError(
+      'FUNCTION_HISTORY_TOO_LARGE',
+      'Function-response history exceeded its allowed size.',
+    );
   }
   return contents;
 }
@@ -562,12 +622,22 @@ export function createGeminiToolGenerator({
   generateContent,
   model,
   config = {},
+  maxFunctionHistoryBytes = MAX_FUNCTION_HISTORY_BYTES,
 } = {}) {
   if (typeof generateContent !== 'function') {
     throw new TypeError('An injected Gemini generateContent function is required.');
   }
   if (typeof model !== 'string' || !model.trim()) {
     throw new TypeError('A Gemini model name is required.');
+  }
+  if (
+    !Number.isSafeInteger(maxFunctionHistoryBytes) ||
+    maxFunctionHistoryBytes < 1 ||
+    maxFunctionHistoryBytes > MAX_FUNCTION_HISTORY_BYTES
+  ) {
+    throw new RangeError(
+      `maxFunctionHistoryBytes must be between 1 and ${MAX_FUNCTION_HISTORY_BYTES}.`,
+    );
   }
   assertPlainObject(config, 'Gemini generation config');
   const baseConfig = {};
@@ -604,7 +674,10 @@ export function createGeminiToolGenerator({
       !Array.isArray(input);
     const contents = [
       ...mapInputToContents(input),
-      ...buildFunctionResponseContents(functionResponses),
+      ...buildFunctionResponseContents(
+        functionResponses,
+        maxFunctionHistoryBytes,
+      ),
     ];
     let requestConfig = baseConfig;
     if (isAssistantRequest) {

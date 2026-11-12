@@ -36,6 +36,9 @@ function createFakeExecutor(implementation = async () => ({ value: 'ok' })) {
   return {
     calls,
     executor: {
+      isBoundTo() {
+        return true;
+      },
       async execute(...args) {
         calls.push(args);
         return implementation(...args);
@@ -102,6 +105,8 @@ test('executes a successful tool through the executor and returns its function r
   assert.equal(result.retrySafety.safeToRetry, false);
   assert.deepEqual(requests[1].functionResponses, [{
     round: 1,
+    roundCallIndex: 1,
+    roundCallCount: 1,
     call: {
       id: 'call-1',
       name: 'lookup_data',
@@ -334,6 +339,9 @@ test('preserves successful tool results when a later provider generation fails',
   const orchestrator = createToolOrchestrator({
     registry,
     executor: {
+      isBoundTo(candidateRegistry) {
+        return executor.isBoundTo(candidateRegistry);
+      },
       async execute(...args) {
         executions += 1;
         return executor.execute(...args);
@@ -475,6 +483,9 @@ test('treats an unclassified post-dispatch executor failure as uncertain', async
   const orchestrator = createToolOrchestrator({
     registry,
     executor: {
+      isBoundTo() {
+        return true;
+      },
       async execute(_name, _args, _context, { onStarted }) {
         onStarted();
         throw new Error('completion cannot be confirmed');
@@ -524,6 +535,9 @@ test('keeps separate progress for multiple calls and identifies validated undisp
   const registry = createRegistry();
   let invocation = 0;
   const executor = {
+    isBoundTo() {
+      return true;
+    },
     async execute(name, args, context, hooks) {
       if (args.fail) {
         hooks.onStarted();
@@ -635,6 +649,9 @@ test('never invokes the executor for an unregistered tool', async () => {
   const orchestrator = createToolOrchestrator({
     registry,
     executor: {
+      isBoundTo() {
+        return true;
+      },
       async execute() {
         executorCalls += 1;
         return {};
@@ -661,6 +678,7 @@ test('rejects limits above hard caps and accepts downward configuration', () => 
     { maxToolRounds: 3 },
     { maxCallsPerRound: 4 },
     { maxTotalCalls: 7 },
+    { maxFunctionResponseBytes: 64 * 1024 + 1 },
     { maxTotalCalls: -1 },
   ]) {
     assert.throws(
@@ -675,6 +693,45 @@ test('rejects limits above hard caps and accepts downward configuration', () => 
     maxCallsPerRound: 1,
     maxTotalCalls: 2,
   }));
+});
+
+test('rejects mismatched registry bindings and caps aggregate function history without replay', async () => {
+  const registry = createRegistry();
+  const otherRegistry = createRegistry({ name: 'other_tool' });
+  const executor = createToolExecutor({ registry: otherRegistry });
+  assert.throws(() => createToolOrchestrator({
+    registry,
+    executor,
+    generator: async () => ({ text: 'not reached' }),
+  }), /same registry/);
+
+  const matchingExecutor = createToolExecutor({ registry });
+  let executions = 0;
+  const orchestrator = createToolOrchestrator({
+    registry,
+    executor: {
+      isBoundTo(candidateRegistry) {
+        return matchingExecutor.isBoundTo(candidateRegistry);
+      },
+      async execute(...args) {
+        executions += 1;
+        return matchingExecutor.execute(...args);
+      },
+    },
+    maxFunctionResponseBytes: 64,
+    generator: async () => ({
+      functionCalls: [functionCall('large-response')],
+    }),
+  });
+  await assert.rejects(orchestrator.run('input', {
+    authorizedTools: ['lookup_data'],
+  }), (error) =>
+    error.code === 'FUNCTION_RESPONSE_HISTORY_TOO_LARGE' &&
+    error.functionResponses.length === 1 &&
+    error.executionProgress.calls[0].state === 'succeeded' &&
+    error.retrySafety.safeToRetry === false,
+  );
+  assert.equal(executions, 1);
 });
 
 test('imports safely without SDK-specific dependencies or filesystem side effects', async () => {

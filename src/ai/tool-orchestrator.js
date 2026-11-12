@@ -4,7 +4,9 @@ const HARD_LIMITS = Object.freeze({
   maxToolRounds: 2,
   maxCallsPerRound: 3,
   maxTotalCalls: 6,
+  maxFunctionResponseBytes: 64 * 1024,
 });
+const DEFAULT_MAX_FUNCTION_RESPONSE_BYTES = 64 * 1024;
 const TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 const ERROR_DETAILS = Object.freeze({
   TOOL_NOT_FOUND: 'Requested tool is not available.',
@@ -313,6 +315,14 @@ function cloneJson(value) {
   }
 }
 
+function getSerializedBytes(value) {
+  try {
+    return Buffer.byteLength(JSON.stringify(value), 'utf8');
+  } catch {
+    return Infinity;
+  }
+}
+
 function deepFreeze(value) {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) {
     return value;
@@ -333,6 +343,7 @@ export function createToolOrchestrator({
   executor,
   registry,
   createRequestId = randomUUID,
+  maxFunctionResponseBytes = DEFAULT_MAX_FUNCTION_RESPONSE_BYTES,
   maxToolRounds = HARD_LIMITS.maxToolRounds,
   maxCallsPerRound = HARD_LIMITS.maxCallsPerRound,
   maxTotalCalls = HARD_LIMITS.maxTotalCalls,
@@ -350,12 +361,20 @@ export function createToolOrchestrator({
   ) {
     throw new TypeError('A tool registry is required.');
   }
+  if (
+    !executor ||
+    typeof executor.isBoundTo !== 'function' ||
+    executor.isBoundTo(registry) !== true
+  ) {
+    throw new TypeError('The tool executor must be bound to the same registry.');
+  }
   if (typeof createRequestId !== 'function') {
     throw new TypeError('createRequestId must be a function.');
   }
   assertLimit('maxToolRounds', maxToolRounds);
   assertLimit('maxCallsPerRound', maxCallsPerRound);
   assertLimit('maxTotalCalls', maxTotalCalls);
+  assertLimit('maxFunctionResponseBytes', maxFunctionResponseBytes);
 
   const declarations = registry.getPublicDeclarations();
   if (!Array.isArray(declarations)) {
@@ -454,6 +473,17 @@ export function createToolOrchestrator({
             functionResponses,
           );
         }
+        if (calls.length > HARD_LIMITS.maxCallsPerRound) {
+          progress.push(...roundProgress);
+          throw orchestrationFailure(
+            'TOOL_CALL_LIMIT',
+            'The maximum number of tool calls per round was reached.',
+            'orchestration',
+            requestId,
+            progress,
+            functionResponses,
+          );
+        }
         if (calls.length > maxCallsPerRound) {
           progress.push(...roundProgress);
           throw orchestrationFailure(
@@ -491,6 +521,8 @@ export function createToolOrchestrator({
           const callProgress = roundProgress[callIndex];
           const responseBase = {
             round: completedRounds,
+            roundCallIndex: callIndex + 1,
+            roundCallCount: calls.length,
             call: callRecord,
             id: call.id,
             name: call.name,
@@ -509,6 +541,20 @@ export function createToolOrchestrator({
                 message: ERROR_DETAILS.TOOL_NOT_FOUND,
               }),
             }));
+            if (
+              getSerializedBytes([...functionResponses, ...roundResponses]) >
+              maxFunctionResponseBytes
+            ) {
+              functionResponses.push(...roundResponses);
+              throw orchestrationFailure(
+                'FUNCTION_RESPONSE_HISTORY_TOO_LARGE',
+                'Accumulated function-response history exceeded its allowed size.',
+                'orchestration',
+                requestId,
+                progress,
+                functionResponses,
+              );
+            }
             continue;
           }
 
@@ -547,7 +593,22 @@ export function createToolOrchestrator({
                 result: deepFreeze(safeResult),
               }));
             }
+            if (
+              getSerializedBytes([...functionResponses, ...roundResponses]) >
+              maxFunctionResponseBytes
+            ) {
+              functionResponses.push(...roundResponses);
+              throw orchestrationFailure(
+                'FUNCTION_RESPONSE_HISTORY_TOO_LARGE',
+                'Accumulated function-response history exceeded its allowed size.',
+                'orchestration',
+                requestId,
+                progress,
+                functionResponses,
+              );
+            }
           } catch (error) {
+            if (error instanceof ToolOrchestrationError) throw error;
             const errorCode = Object.hasOwn(ERROR_DETAILS, error?.code)
               ? error.code
               : 'TOOL_EXECUTION_FAILED';
@@ -584,6 +645,20 @@ export function createToolOrchestrator({
                 'TOOL_OUTCOME_UNKNOWN',
                 'Tool execution timed out or its completion could not be confirmed.',
                 'tool_execution',
+                requestId,
+                progress,
+                functionResponses,
+              );
+            }
+            if (
+              getSerializedBytes([...functionResponses, ...roundResponses]) >
+              maxFunctionResponseBytes
+            ) {
+              functionResponses.push(...roundResponses);
+              throw orchestrationFailure(
+                'FUNCTION_RESPONSE_HISTORY_TOO_LARGE',
+                'Accumulated function-response history exceeded its allowed size.',
+                'orchestration',
                 requestId,
                 progress,
                 functionResponses,

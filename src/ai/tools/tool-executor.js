@@ -131,6 +131,9 @@ export function createToolExecutor({
   }
 
   return Object.freeze({
+    isBoundTo(candidateRegistry) {
+      return candidateRegistry === registry;
+    },
     async execute(name, args, trustedContext = {}, { onStarted } = {}) {
       if (onStarted !== undefined && typeof onStarted !== 'function') {
         throw new TypeError('onStarted must be a function.');

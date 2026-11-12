@@ -51,6 +51,8 @@ Function responses sent back to the generator preserve call IDs and names:
 ```js
 {
   round: 1,
+  roundCallIndex: 1,
+  roundCallCount: 1,
   call: { id: 'call-1', name: 'lookup_data', arguments: {} },
   id: 'call-1',
   name: 'lookup_data',
@@ -84,7 +86,9 @@ function response in the provider's required conversation history.
    progress when the generator returns a valid text-only response.
 3. Validate a complete batch of function calls, including IDs, names, and
    argument object shape.
-4. Check round and call limits before executing any call in the batch.
+4. Check round and call limits before executing any call in the batch. Each
+   response records its one-based index and the expected batch size so the
+   adapter can reject an incomplete or reordered multi-call round.
 5. Execute registered calls sequentially through the injected executor,
    passing only the trusted context supplied to `run`.
 6. Append normalized results or errors, then invoke the generator again.
@@ -138,6 +142,16 @@ reimplement their security checks. The registry prevents unregistered names
 from reaching execution. The executor checks explicit trusted permissions and
 never derives identity, scope, or permissions from model arguments. Neither
 this module nor its tests log arguments or results.
+
+The executor must expose `isBoundTo(registry)` and return true only for the
+registry instance used to construct it. The orchestrator enforces this
+identity before accepting declarations, preventing an accidentally mismatched
+registry/executor pair. Custom injected executors must implement the same
+trusted composition contract.
+
+The orchestrator and Gemini adapter each reject accumulated function history
+over 64 KiB; neither truncates history. The byte totals are measured over
+their respective serialized application records and provider-history parts.
 
 Tool results remain untrusted data even when valid JSON. Size limits do not
 detect prompt injection or redact secrets; future integrations must preserve

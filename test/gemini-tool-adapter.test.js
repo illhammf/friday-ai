@@ -139,6 +139,8 @@ test('maps successful and normalized error function responses into Gemini histor
   const functionResponses = [
     {
       round: 1,
+      roundCallIndex: 1,
+      roundCallCount: 2,
       call: {
         id: 'success-id',
         name: 'search_memory',
@@ -150,6 +152,8 @@ test('maps successful and normalized error function responses into Gemini histor
     },
     {
       round: 1,
+      roundCallIndex: 2,
+      roundCallCount: 2,
       call: {
         id: 'error-id',
         name: 'search_memory',
@@ -221,6 +225,8 @@ test('reconstructs function history in round order', async () => {
   const { adapter, requests } = createAdapter({ response: { text: 'Final.' } });
   const call = (round, id) => ({
     round,
+    roundCallIndex: 1,
+    roundCallCount: 1,
     id,
     name: 'search_memory',
     call: {
@@ -241,6 +247,59 @@ test('reconstructs function history in round order', async () => {
     'model',
     'user',
   ]);
+});
+
+test('rejects incomplete or reordered multi-call history instead of repairing it', async () => {
+  const { adapter } = createAdapter({ response: { text: 'Not sent.' } });
+  const call = (roundCallIndex) => ({
+    round: 1,
+    roundCallIndex,
+    roundCallCount: 2,
+    call: {
+      id: `call-${roundCallIndex}`,
+      name: 'search_memory',
+      arguments: { query: `query-${roundCallIndex}` },
+    },
+    id: `call-${roundCallIndex}`,
+    name: 'search_memory',
+    result: { index: roundCallIndex },
+  });
+
+  await assert.rejects(adapter({
+    input: 'Question.',
+    tools: [],
+    functionResponses: [call(1)],
+  }), { code: 'INVALID_FUNCTION_RESPONSES' });
+  await assert.rejects(adapter({
+    input: 'Question.',
+    tools: [],
+    functionResponses: [call(2), call(1)],
+  }), { code: 'INVALID_FUNCTION_RESPONSES' });
+});
+
+test('rejects aggregate function history over the configured bound without truncation', async () => {
+  const { adapter, requests } = createAdapter({
+    response: { text: 'Not sent.' },
+    maxFunctionHistoryBytes: 128,
+  });
+  await assert.rejects(adapter({
+    input: 'Question.',
+    tools: [],
+    functionResponses: [{
+      round: 1,
+      roundCallIndex: 1,
+      roundCallCount: 1,
+      id: 'large-result',
+      name: 'search_memory',
+      call: {
+        id: 'large-result',
+        name: 'search_memory',
+        arguments: { query: 'x' },
+      },
+      result: { value: 'x'.repeat(256) },
+    }],
+  }), { code: 'FUNCTION_HISTORY_TOO_LARGE' });
+  assert.equal(requests.length, 0);
 });
 
 test('rejects empty, malformed, duplicate, or oversized function calls', async () => {
@@ -363,6 +422,8 @@ test('validates function response history and bounds result data', async () => {
       tools: [],
       functionResponses: [{
         round: 1,
+        roundCallIndex: 1,
+        roundCallCount: 1,
         id: 'call-1',
         name: 'search_memory',
         call: {
@@ -384,6 +445,8 @@ test('validates function response history and bounds result data', async () => {
       tools: [],
       functionResponses: [{
         round: 1,
+        roundCallIndex: 1,
+        roundCallCount: 1,
         id: 'call-1',
         name: 'search_memory',
         call: {
