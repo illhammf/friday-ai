@@ -92,6 +92,12 @@ test('executes a successful tool through the executor and returns its function r
     'Found the value.',
   );
   assert.deepEqual(requests[1].functionResponses, [{
+    round: 1,
+    call: {
+      id: 'call-1',
+      name: 'lookup_data',
+      arguments: {},
+    },
     id: 'call-1',
     name: 'lookup_data',
     result: { value: 'ok' },

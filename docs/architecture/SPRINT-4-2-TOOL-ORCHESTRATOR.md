@@ -45,16 +45,32 @@ mixed non-empty text and tool calls, or an empty response are rejected.
 Function responses sent back to the generator preserve call IDs and names:
 
 ```js
-{ id: 'call-1', name: 'lookup_data', result: { value: 'ok' } }
-{ id: 'call-2', name: 'lookup_data', error: {
+{
+  round: 1,
+  call: { id: 'call-1', name: 'lookup_data', arguments: {} },
+  id: 'call-1',
+  name: 'lookup_data',
+  result: { value: 'ok' }
+}
+{
+  round: 1,
+  call: { id: 'call-2', name: 'lookup_data', arguments: {} },
+  id: 'call-2',
+  name: 'lookup_data',
+  error: {
   code: 'TOOL_TIMEOUT',
   message: 'Tool execution timed out.'
-} }
+  }
+}
 ```
 
 Tool execution errors are converted to stable, bounded codes and messages.
 Internal exception messages and stacks are never forwarded. Unknown registered
 names receive a `TOOL_NOT_FOUND` response without invoking the executor.
+Each response also carries its one-based round and the original normalized call
+(`id`, `name`, and bounded JSON `arguments`). This allows provider adapters to
+reconstruct the model function-call turn before returning the corresponding
+function response in the provider's required conversation history.
 
 ## Orchestration Flow
 
@@ -118,8 +134,8 @@ filesystem, network, database, or external provider access is introduced.
 ## Known Limitations and Future Integration
 
 - The generator contract is deliberately application-level and has no SDK
-  adapter yet. A future adapter must translate provider calls/responses without
-  exposing SDK-specific types to this module.
+  types. Provider adapters translate provider calls/responses without exposing
+  SDK-specific types to this module.
 - Function responses accumulate across rounds; provider conversation-history
   formatting belongs in the adapter.
 - Sequential execution and fixed hard caps limit throughput by design.

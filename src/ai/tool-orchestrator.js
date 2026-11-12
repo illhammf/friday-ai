@@ -138,9 +138,90 @@ function normalizeCalls(calls, knownCallIds) {
       );
     }
     knownCallIds.add(data.id);
-    return { id: data.id, name: data.name, arguments: data.arguments };
+    const safeArguments = clonePlainJson(data.arguments, 4096);
+    if (safeArguments === null) {
+      throw new ToolOrchestrationError(
+        'INVALID_FUNCTION_CALL',
+        'Function call arguments must be bounded JSON data.',
+      );
+    }
+    return { id: data.id, name: data.name, arguments: safeArguments };
   });
   return normalized;
+}
+
+function clonePlainJson(value, maxBytes) {
+  const active = new Set();
+  function clone(item) {
+    if (
+      item === null ||
+      typeof item === 'string' ||
+      typeof item === 'boolean'
+    ) {
+      return item;
+    }
+    if (typeof item === 'number' && Number.isFinite(item)) return item;
+    if (!item || typeof item !== 'object' || active.has(item)) return undefined;
+
+    active.add(item);
+    let copy;
+    if (Array.isArray(item)) {
+      copy = [];
+      for (const element of item) {
+        const cloned = clone(element);
+        if (cloned === undefined) {
+          active.delete(item);
+          return undefined;
+        }
+        copy.push(cloned);
+      }
+    } else {
+      const prototype = Object.getPrototypeOf(item);
+      if (prototype !== Object.prototype && prototype !== null) {
+        active.delete(item);
+        return undefined;
+      }
+      copy = {};
+      for (const key of Reflect.ownKeys(item)) {
+        const descriptor = Object.getOwnPropertyDescriptor(item, key);
+        if (
+          typeof key !== 'string' ||
+          !descriptor?.enumerable ||
+          !Object.hasOwn(descriptor, 'value')
+        ) {
+          active.delete(item);
+          return undefined;
+        }
+        const cloned = clone(descriptor.value);
+        if (cloned === undefined) {
+          active.delete(item);
+          return undefined;
+        }
+        Object.defineProperty(copy, key, {
+          value: cloned,
+          enumerable: true,
+        });
+      }
+    }
+    active.delete(item);
+    return copy;
+  }
+
+  const result = clone(value);
+  if (!result || Array.isArray(result) || typeof result !== 'object') return null;
+  let serialized;
+  try {
+    serialized = JSON.stringify(result);
+  } catch {
+    return null;
+  }
+  if (
+    typeof serialized !== 'string' ||
+    Buffer.byteLength(serialized, 'utf8') > maxBytes
+  ) {
+    return null;
+  }
+  return result;
 }
 
 function cloneJson(value) {
@@ -253,10 +334,20 @@ export function createToolOrchestrator({
         const roundResponses = [];
 
         for (const call of calls) {
+          const callRecord = deepFreeze({
+            id: call.id,
+            name: call.name,
+            arguments: call.arguments,
+          });
+          const responseBase = {
+            round: completedRounds,
+            call: callRecord,
+            id: call.id,
+            name: call.name,
+          };
           if (!registry.has(call.name)) {
             roundResponses.push(Object.freeze({
-              id: call.id,
-              name: call.name,
+              ...responseBase,
               error: Object.freeze({
                 code: 'TOOL_NOT_FOUND',
                 message: ERROR_DETAILS.TOOL_NOT_FOUND,
@@ -274,8 +365,7 @@ export function createToolOrchestrator({
             const safeResult = cloneJson(result);
             if (safeResult === null && result !== null) {
               roundResponses.push(Object.freeze({
-                id: call.id,
-                name: call.name,
+                ...responseBase,
                 error: Object.freeze({
                   code: 'TOOL_OUTPUT_INVALID',
                   message: ERROR_DETAILS.TOOL_OUTPUT_INVALID,
@@ -283,15 +373,13 @@ export function createToolOrchestrator({
               }));
             } else {
               roundResponses.push(Object.freeze({
-                id: call.id,
-                name: call.name,
+                ...responseBase,
                 result: deepFreeze(safeResult),
               }));
             }
           } catch (error) {
             roundResponses.push(Object.freeze({
-              id: call.id,
-              name: call.name,
+              ...responseBase,
               error: Object.freeze(normalizeToolError(error)),
             }));
           }
