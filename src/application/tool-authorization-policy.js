@@ -133,6 +133,11 @@ function normalizeCapabilityGrants(capabilityToolGrants, allowlist, registry) {
           `Tool "${toolName}" is not registered.`,
         );
       }
+      if (registry.get(toolName)?.category !== 'read_only') {
+        throw new ToolAuthorizationPolicyError(
+          `Tool "${toolName}" is not registered as read_only.`,
+        );
+      }
     }
     grants.set(key, toolNames);
   }
@@ -148,9 +153,11 @@ export function createToolAuthorizationPolicy({
   allowedTools = [],
   capabilityToolGrants = {},
   getPrivateSessionId,
+  isValidSenderId,
 } = {}) {
   if (
     !registry ||
+    typeof registry.get !== 'function' ||
     typeof registry.has !== 'function' ||
     typeof registry.getPublicDeclarations !== 'function'
   ) {
@@ -161,6 +168,11 @@ export function createToolAuthorizationPolicy({
   if (typeof getPrivateSessionId !== 'function') {
     throw new ToolAuthorizationPolicyError(
       'An application-owned private-session resolver is required.',
+    );
+  }
+  if (typeof isValidSenderId !== 'function') {
+    throw new ToolAuthorizationPolicyError(
+      'An application-owned sender identity validator is required.',
     );
   }
 
@@ -198,6 +210,13 @@ export function createToolAuthorizationPolicy({
         !input.senderId.trim() ||
         input.senderId !== input.senderId.trim()
       ) {
+        return denial(DENIAL_REASONS.sender);
+      }
+      try {
+        if (isValidSenderId(input.senderId) !== true) {
+          return denial(DENIAL_REASONS.sender);
+        }
+      } catch {
         return denial(DENIAL_REASONS.sender);
       }
       if (
@@ -261,9 +280,6 @@ export function createToolAuthorizationPolicy({
       const authorizedTools = Object.freeze([...requestedTools]);
       const context = Object.freeze({
         conversationType: 'private',
-        senderId: input.senderId,
-        privateSessionId: input.privateSessionId,
-        conversationSessionId: input.conversationSessionId,
         authorizedTools,
       });
 
@@ -271,6 +287,13 @@ export function createToolAuthorizationPolicy({
         authorized: true,
         reason: 'explicit_application_capability_grant',
         context,
+        identity: Object.freeze({
+          senderId: input.senderId,
+        }),
+        sessionScope: Object.freeze({
+          privateSessionId: input.privateSessionId,
+          conversationSessionId: input.conversationSessionId,
+        }),
       });
     },
   });

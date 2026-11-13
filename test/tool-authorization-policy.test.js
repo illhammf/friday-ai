@@ -32,6 +32,8 @@ function createPolicy({
   allowedTools = ['lookup_data'],
   capabilityToolGrants = { lookup: ['lookup_data'] },
   getPrivateSessionId = (senderId) => `private:${senderId}`,
+  isValidSenderId = (senderId) =>
+    /^[a-z0-9._+-]+@(?:c\.us|lid|s\.whatsapp\.net)$/i.test(senderId),
 } = {}) {
   return {
     registry,
@@ -40,6 +42,7 @@ function createPolicy({
       allowedTools,
       capabilityToolGrants,
       getPrivateSessionId,
+      isValidSenderId,
     }),
   };
 }
@@ -63,14 +66,18 @@ test('grants an explicitly approved private capability with trusted identity and
   assert.equal(decision.reason, 'explicit_application_capability_grant');
   assert.deepEqual(decision.context, {
     conversationType: 'private',
-    senderId: 'user@c.us',
+    authorizedTools: ['lookup_data'],
+  });
+  assert.deepEqual(decision.identity, { senderId: 'user@c.us' });
+  assert.deepEqual(decision.sessionScope, {
     privateSessionId: 'private:user@c.us',
     conversationSessionId: 'private:user@c.us',
-    authorizedTools: ['lookup_data'],
   });
   assert.equal(Object.isFrozen(decision), true);
   assert.equal(Object.isFrozen(decision.context), true);
   assert.equal(Object.isFrozen(decision.context.authorizedTools), true);
+  assert.equal(Object.isFrozen(decision.identity), true);
+  assert.equal(Object.isFrozen(decision.sessionScope), true);
 });
 
 test('denies a private conversation with no requested capabilities or grants', () => {
@@ -129,6 +136,13 @@ test('denies missing or malformed sender identity', () => {
     assert.equal(decision.authorized, false);
     assert.equal(decision.reason, 'missing_or_invalid_sender_identity');
   }
+  const { policy: strictPolicy } = createPolicy({
+    isValidSenderId: () => false,
+  });
+  assert.equal(
+    strictPolicy.authorize(privateRuntimeContext()).reason,
+    'missing_or_invalid_sender_identity',
+  );
 });
 
 test('does not use a sender display name as trusted identity', () => {
@@ -263,17 +277,49 @@ test('returns isolated immutable context and does not mutate registry or executo
   runtimeContext.requestedCapabilities.push('other');
 
   assert.equal(decision.authorized, true);
-  assert.equal(decision.context.senderId, 'user@c.us');
+  assert.equal(decision.identity.senderId, 'user@c.us');
   assert.deepEqual(decision.context.authorizedTools, ['lookup_data']);
+  assert.equal('senderId' in decision.context, false);
+  assert.equal('privateSessionId' in decision.context, false);
   assert.equal(registry.size, initialSize);
   assert.deepEqual(registry.getPublicDeclarations(), initialDeclarations);
   assert.equal(executor.isBoundTo(registry), initialBinding);
   assert.throws(() => {
-    decision.context.senderId = 'mutated@c.us';
+    decision.identity.senderId = 'mutated@c.us';
+  }, TypeError);
+  assert.throws(() => {
+    decision.sessionScope.privateSessionId = 'private:other@c.us';
   }, TypeError);
   assert.throws(() => {
     decision.context.authorizedTools.push('read_notes');
   }, TypeError);
+});
+
+test('keeps sender and session identifiers out of handler context', async () => {
+  let handlerContext;
+  const registry = createToolRegistry();
+  registry.register({
+    name: 'lookup_data',
+    description: 'Read an allowlisted value.',
+    inputSchema: EMPTY_SCHEMA,
+    category: 'read_only',
+    handler: async (_arguments, context) => {
+      handlerContext = context;
+      return { ok: true };
+    },
+  });
+  const executor = createToolExecutor({ registry });
+  const { policy } = createPolicy({ registry });
+  const decision = policy.authorize(privateRuntimeContext());
+
+  assert.equal(decision.authorized, true);
+  await executor.execute('lookup_data', {}, decision.context);
+  assert.equal(handlerContext.conversationType, 'private');
+  assert.equal('senderId' in handlerContext, false);
+  assert.equal('privateSessionId' in handlerContext, false);
+  assert.equal('conversationSessionId' in handlerContext, false);
+  assert.equal('authorizedTools' in handlerContext, false);
+  assert.equal(handlerContext.signal instanceof AbortSignal, true);
 });
 
 test('uses only injected application dependencies and performs no WhatsApp runtime integration', () => {
@@ -286,6 +332,7 @@ test('uses only injected application dependencies and performs no WhatsApp runti
       sessionResolverCalls += 1;
       return `private:${senderId}`;
     },
+    isValidSenderId: () => true,
   });
   const decision = policy.authorize(privateRuntimeContext());
 
@@ -315,4 +362,37 @@ test('rejects malformed or duplicate static authorization configuration', () => 
       'not a capability': ['lookup_data'],
     },
   }), ToolAuthorizationPolicyError);
+});
+
+test('default empty allowlist grants no registered tools', () => {
+  const registry = createRegistry();
+  const policy = createToolAuthorizationPolicy({
+    registry,
+    getPrivateSessionId: (senderId) => `private:${senderId}`,
+    isValidSenderId: (senderId) => senderId === 'user@c.us',
+  });
+  const decision = policy.authorize(privateRuntimeContext());
+
+  assert.equal(decision.authorized, false);
+  assert.equal(decision.reason, 'unconfigured_application_capability');
+  assert.equal(decision.context, null);
+});
+
+test('refuses to configure grants for action-category tools', () => {
+  const registry = createToolRegistry();
+  registry.register({
+    name: 'perform_action',
+    description: 'Action tool must not be granted.',
+    inputSchema: EMPTY_SCHEMA,
+    category: 'action',
+    handler: async () => ({ ok: true }),
+  });
+
+  assert.throws(() => createToolAuthorizationPolicy({
+    registry,
+    allowedTools: ['perform_action'],
+    capabilityToolGrants: { action: ['perform_action'] },
+    getPrivateSessionId: (senderId) => `private:${senderId}`,
+    isValidSenderId: () => true,
+  }), /not registered as read_only/);
 });
