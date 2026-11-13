@@ -27,12 +27,13 @@ function createDependencies({
     description: 'Read an allowlisted value.',
     inputSchema: EMPTY_SCHEMA,
     category: 'read_only',
+    requiredCapabilities: ['lookup'],
     handler: async () => ({ ok: true }),
   });
   const authorizationPolicy = createToolAuthorizationPolicy({
     registry,
     allowedTools: ['lookup_data'],
-    capabilityToolGrants: { lookup: ['lookup_data'] },
+    knownCapabilities: ['lookup'],
     getPrivateSessionId,
     isValidSenderId,
   });
@@ -77,6 +78,7 @@ test('authorizes a valid private adapter identity using the canonical private se
   assert.deepEqual(decision.context, {
     conversationType: 'private',
     authorizedTools: ['lookup_data'],
+    grantedCapabilities: ['lookup'],
   });
 });
 
@@ -153,6 +155,7 @@ test('rejects unexpected input properties, including display metadata and model 
   for (const context of [
     privateRuntimeContext({ displayName: 'Trusted name?' }),
     privateRuntimeContext({ requestedCapabilities: ['lookup'] }),
+    privateRuntimeContext({ grantedCapabilities: ['lookup'] }),
     privateRuntimeContext({ authorizedTools: ['lookup_data'] }),
   ]) {
     const decision = projector.project(context);
@@ -182,7 +185,7 @@ test('user-provided capability data cannot grant tools and empty configuration d
 
   const injection = projector.project({
     ...privateRuntimeContext(),
-    requestedCapabilities: ['lookup'],
+    grantedCapabilities: ['lookup'],
   });
   const noConfiguredCapabilities = projector.project(privateRuntimeContext());
 

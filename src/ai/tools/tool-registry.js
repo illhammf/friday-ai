@@ -6,6 +6,7 @@ const TOOL_CATEGORIES = new Set([
   'action',
   'approval_required',
 ]);
+const CAPABILITY_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 const RESERVED_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 
 function cloneAndFreeze(value) {
@@ -31,7 +32,14 @@ function validateDefinition(definition) {
   if (!definition || typeof definition !== 'object' || Array.isArray(definition)) {
     throw new TypeError('Tool definition must be an object.');
   }
-  const { name, description, inputSchema, category, handler } = definition;
+  const {
+    name,
+    description,
+    inputSchema,
+    category,
+    requiredCapabilities,
+    handler,
+  } = definition;
   if (typeof name !== 'string' || !TOOL_NAME_PATTERN.test(name)) {
     throw new TypeError('Tool name must match ^[a-z][a-z0-9_]{0,63}$.');
   }
@@ -55,6 +63,18 @@ function validateDefinition(definition) {
   if (typeof category !== 'string' || !TOOL_CATEGORIES.has(category)) {
     throw new TypeError('Tool category must be read_only, action, or approval_required.');
   }
+  if (
+    !Array.isArray(requiredCapabilities) ||
+    requiredCapabilities.length === 0 ||
+    requiredCapabilities.some((capability, index) =>
+      typeof capability !== 'string' ||
+      !CAPABILITY_PATTERN.test(capability) ||
+      requiredCapabilities.indexOf(capability) !== index)
+  ) {
+    throw new TypeError(
+      'requiredCapabilities must contain unique valid capability names.',
+    );
+  }
   if (typeof handler !== 'function') {
     throw new TypeError('Tool handler must be a function.');
   }
@@ -75,6 +95,9 @@ export function createToolRegistry() {
         description: definition.description.trim(),
         inputSchema: cloneAndFreeze(definition.inputSchema),
         category: definition.category,
+        requiredCapabilities: Object.freeze([
+          ...definition.requiredCapabilities,
+        ]),
         handler: definition.handler,
       });
       tools.set(tool.name, tool);
@@ -92,6 +115,15 @@ export function createToolRegistry() {
         description: tool.description,
         parametersJsonSchema: tool.inputSchema,
       })));
+    },
+    getAuthorizationMetadata(name) {
+      const tool = tools.get(name);
+      if (!tool) return undefined;
+      return Object.freeze({
+        name: tool.name,
+        category: tool.category,
+        requiredCapabilities: tool.requiredCapabilities,
+      });
     },
     get size() {
       return tools.size;

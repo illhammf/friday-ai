@@ -14,6 +14,10 @@ const emptyObjectSchema = {
   properties: {},
   additionalProperties: false,
 };
+const AUTHORIZED_CONTEXT = {
+  authorizedTools: ['lookup_data'],
+  grantedCapabilities: ['lookup'],
+};
 
 function createRegistry({ name = 'lookup_data', handler = async () => ({ value: 'ok' }) } = {}) {
   const registry = createToolRegistry();
@@ -22,6 +26,7 @@ function createRegistry({ name = 'lookup_data', handler = async () => ({ value: 
     description: 'Read an allowlisted value.',
     inputSchema: emptyObjectSchema,
     category: 'read_only',
+    requiredCapabilities: ['lookup'],
     handler,
   });
   return registry;
@@ -61,7 +66,7 @@ test('returns normal text and provides registry declarations through the generat
     },
   });
 
-  const result = await orchestrator.run(input);
+  const result = await orchestrator.run(input, AUTHORIZED_CONTEXT);
   assert.equal(result.text, 'Hello back.');
   assert.equal(result.status, 'succeeded');
   assert.equal(result.executionProgress.state, 'not_started');
@@ -76,6 +81,131 @@ test('returns normal text and provides registry declarations through the generat
   ]);
   assert.deepEqual(request.functionResponses, []);
   assert.deepEqual(calls, []);
+});
+
+test('filters declarations to registered tools with all required granted capabilities', async () => {
+  const registry = createRegistry();
+  registry.register({
+    name: 'read_private_notes',
+    description: 'Read private notes.',
+    inputSchema: emptyObjectSchema,
+    category: 'read_only',
+    requiredCapabilities: ['lookup', 'private_context'],
+    handler: async () => ({ value: 'secret' }),
+  });
+  let observedTools;
+  const orchestrator = createToolOrchestrator({
+    registry,
+    executor: createToolExecutor({ registry }),
+    generator: async ({ tools }) => {
+      observedTools = tools;
+      return { text: 'No eligible private-note tool.' };
+    },
+  });
+
+  await orchestrator.run('input', AUTHORIZED_CONTEXT);
+
+  assert.deepEqual(observedTools.map(({ name }) => name), ['lookup_data']);
+});
+
+test('model-requested tools excluded from declarations are denied before dispatch', async () => {
+  let executions = 0;
+  const registry = createRegistry();
+  registry.register({
+    name: 'read_private_notes',
+    description: 'Read private notes.',
+    inputSchema: emptyObjectSchema,
+    category: 'read_only',
+    requiredCapabilities: ['lookup', 'private_context'],
+    handler: async () => {
+      executions += 1;
+      return { value: 'secret' };
+    },
+  });
+  let generation = 0;
+  const orchestrator = createToolOrchestrator({
+    registry,
+    executor: createToolExecutor({ registry }),
+    generator: async ({ tools }) => {
+      generation += 1;
+      assert.deepEqual(tools.map(({ name }) => name), ['lookup_data']);
+      return generation === 1
+        ? {
+          functionCalls: [
+            functionCall('excluded-tool', 'read_private_notes'),
+          ],
+        }
+        : { text: 'Not available.' };
+    },
+  });
+
+  const result = await orchestrator.run({
+    authorizedTools: ['read_private_notes'],
+    grantedCapabilities: ['private_context'],
+  }, AUTHORIZED_CONTEXT);
+
+  assert.equal(result.functionResponses[0].error.code, 'TOOL_PERMISSION_DENIED');
+  assert.equal(executions, 0);
+});
+
+test('missing or malformed authorization context exposes no declarations', async () => {
+  const registry = createRegistry();
+  for (const trustedContext of [
+    undefined,
+    {},
+    { authorizedTools: ['lookup_data'] },
+    {
+      authorizedTools: ['not_registered'],
+      grantedCapabilities: ['lookup'],
+    },
+  ]) {
+    let observedTools;
+    const orchestrator = createToolOrchestrator({
+      registry,
+      executor: createToolExecutor({ registry }),
+      generator: async ({ tools }) => {
+        observedTools = tools;
+        return { text: 'No eligible tools.' };
+      },
+    });
+    await orchestrator.run('input', trustedContext);
+    assert.deepEqual(observedTools, []);
+  }
+});
+
+test('executor rechecks capabilities if the trusted grant changes after declaration generation', async () => {
+  let executions = 0;
+  const registry = createRegistry({
+    handler: async () => {
+      executions += 1;
+      return { value: 'must not run' };
+    },
+  });
+  const executor = createToolExecutor({ registry });
+  const context = {
+    authorizedTools: ['lookup_data'],
+    grantedCapabilities: ['lookup'],
+  };
+  let generation = 0;
+  const orchestrator = createToolOrchestrator({
+    registry,
+    executor,
+    generator: async ({ tools }) => {
+      generation += 1;
+      if (generation === 1) {
+        assert.deepEqual(tools.map(({ name }) => name), ['lookup_data']);
+        context.grantedCapabilities = [];
+        return { functionCalls: [functionCall('revoked-call')] };
+      }
+      return { text: 'Denied.' };
+    },
+  });
+
+  const result = await orchestrator.run('input', context);
+
+  assert.equal(result.functionResponses[0].error.code, 'TOOL_PERMISSION_DENIED');
+  assert.equal(result.executionProgress.calls[0].executionStarted, false);
+  assert.equal(executions, 0);
 });
 
 test('executes a successful tool through the executor and returns its function response', async () => {
@@ -97,7 +227,7 @@ test('executes a successful tool through the executor and returns its function r
 
   const result = await orchestrator.run(
     { prompt: 'lookup' },
-    { authorizedTools: ['lookup_data'] },
+    AUTHORIZED_CONTEXT,
   );
   assert.equal(result.text, 'Found the value.');
   assert.equal(result.executionProgress.hasExecutionStarted, true);
@@ -143,7 +273,7 @@ test('executes multiple calls in order and returns every function response', asy
     },
   });
 
-  const result = await orchestrator.run('input');
+  const result = await orchestrator.run('input', AUTHORIZED_CONTEXT);
   assert.equal(result.text, 'Both done.');
   assert.deepEqual(
     result.executionProgress.calls.map(({ state }) => state),
@@ -178,7 +308,7 @@ test('supports multiple tool-call rounds and sends accumulated responses', async
     },
   });
 
-  const result = await orchestrator.run('input');
+  const result = await orchestrator.run('input', AUTHORIZED_CONTEXT);
   assert.equal(result.text, 'Finished.');
   assert.deepEqual(
     result.executionProgress.calls.map(({ state }) => state),
@@ -279,7 +409,7 @@ test('normalizes executor failures without leaking internal details', async () =
       },
     });
     if (code === 'TOOL_TIMEOUT') {
-      await assert.rejects(orchestrator.run('input'), (error) =>
+      await assert.rejects(orchestrator.run('input', AUTHORIZED_CONTEXT), (error) =>
         error.code === 'TOOL_OUTCOME_UNKNOWN' &&
         error.kind === 'tool_execution' &&
         error.executionProgress.hasUncertainOutcome &&
@@ -288,7 +418,7 @@ test('normalizes executor failures without leaking internal details', async () =
       );
       assert.equal(invocation, 1);
     } else {
-      const result = await orchestrator.run('input');
+      const result = await orchestrator.run('input', AUTHORIZED_CONTEXT);
       assert.equal(result.text, 'Handled.');
       assert.equal(result.executionProgress.calls[0].state, 'failed');
       assert.equal(
@@ -359,6 +489,7 @@ test('preserves successful tool results when a later provider generation fails',
 
   await assert.rejects(orchestrator.run('input', {
     authorizedTools: ['lookup_data'],
+    grantedCapabilities: ['lookup'],
   }), (error) => {
     assert.equal(error.code, 'GENERATOR_FAILED');
     assert.equal(error.kind, 'provider');
@@ -385,6 +516,7 @@ test('reports executor schema validation failure before dispatch as retry-safe',
       additionalProperties: false,
     },
     category: 'read_only',
+    requiredCapabilities: ['lookup'],
     handler: async () => {
       throw new Error('must not execute');
     },
@@ -408,6 +540,7 @@ test('reports executor schema validation failure before dispatch as retry-safe',
 
   const result = await orchestrator.run('input', {
     authorizedTools: ['lookup_data'],
+    grantedCapabilities: ['lookup'],
   });
   assert.equal(result.executionProgress.calls[0].state, 'failed');
   assert.equal(result.executionProgress.calls[0].executionStarted, false);
@@ -440,6 +573,7 @@ test('records a started handler failure as failed and unsafe to replay', async (
 
   const result = await orchestrator.run('input', {
     authorizedTools: ['lookup_data'],
+    grantedCapabilities: ['lookup'],
   });
   assert.equal(result.executionProgress.calls[0].state, 'failed');
   assert.equal(result.executionProgress.calls[0].executionStarted, true);
@@ -464,6 +598,7 @@ test('marks timed-out execution unknown and does not ask the generator again', a
 
   await assert.rejects(orchestrator.run('input', {
     authorizedTools: ['lookup_data'],
+    grantedCapabilities: ['lookup'],
   }), (error) => {
     assert.equal(error.code, 'TOOL_OUTCOME_UNKNOWN');
     assert.equal(error.executionProgress.calls[0].state, 'unknown');
@@ -497,7 +632,7 @@ test('treats an unclassified post-dispatch executor failure as uncertain', async
     },
   });
 
-  await assert.rejects(orchestrator.run('input'), (error) =>
+  await assert.rejects(orchestrator.run('input', AUTHORIZED_CONTEXT), (error) =>
     error.code === 'TOOL_OUTCOME_UNKNOWN' &&
     error.executionProgress.calls[0].state === 'unknown' &&
     error.retrySafety.safeToRetry === false,
@@ -521,7 +656,7 @@ test('rejects a repeated provider call ID across rounds without executing it twi
     },
   });
 
-  await assert.rejects(orchestrator.run('input'), (error) =>
+  await assert.rejects(orchestrator.run('input', AUTHORIZED_CONTEXT), (error) =>
     error.code === 'DUPLICATE_FUNCTION_CALL_ID' &&
     error.executionProgress.calls.length === 1 &&
     error.executionProgress.calls[0].state === 'succeeded' &&
@@ -568,7 +703,7 @@ test('keeps separate progress for multiple calls and identifies validated undisp
     },
   });
 
-  const result = await orchestrator.run('input');
+  const result = await orchestrator.run('input', AUTHORIZED_CONTEXT);
   assert.deepEqual(
     result.executionProgress.calls.map(({ providerCallId, state }) => ({
       providerCallId,
@@ -594,7 +729,10 @@ test('enforces round, per-round, and total call limits before execution', async 
       ? { functionCalls: [functionCall('second-round')] }
       : { functionCalls: [functionCall('first-round')] },
   });
-  await assert.rejects(maxRounds.run('input'), { code: 'TOOL_ROUND_LIMIT' });
+  await assert.rejects(
+    maxRounds.run('input', AUTHORIZED_CONTEXT),
+    { code: 'TOOL_ROUND_LIMIT' },
+  );
   assert.equal(calls.length, 1);
 
   const tooManyAtOnce = createToolOrchestrator({
@@ -608,7 +746,10 @@ test('enforces round, per-round, and total call limits before execution', async 
       ],
     }),
   });
-  await assert.rejects(tooManyAtOnce.run('input'), { code: 'TOOL_CALL_LIMIT' });
+  await assert.rejects(
+    tooManyAtOnce.run('input', AUTHORIZED_CONTEXT),
+    { code: 'TOOL_CALL_LIMIT' },
+  );
   assert.equal(calls.length, 1);
 
   const totalLimit = createToolOrchestrator({
@@ -619,7 +760,10 @@ test('enforces round, per-round, and total call limits before execution', async 
       ? { functionCalls: [functionCall('over-total')] }
       : { functionCalls: [functionCall('within-total')] },
   });
-  await assert.rejects(totalLimit.run('input'), { code: 'TOOL_CALL_LIMIT' });
+  await assert.rejects(
+    totalLimit.run('input', AUTHORIZED_CONTEXT),
+    { code: 'TOOL_CALL_LIMIT' },
+  );
   assert.equal(calls.length, 2);
 });
 
@@ -662,7 +806,7 @@ test('never invokes the executor for an unregistered tool', async () => {
       : { functionCalls: [functionCall('not-registered', 'unregistered_tool')] },
   });
 
-  const result = await orchestrator.run('input');
+  const result = await orchestrator.run('input', AUTHORIZED_CONTEXT);
   assert.equal(result.text, 'Rejected.');
   assert.equal(result.executionProgress.calls[0].state, 'failed');
   assert.equal(result.retrySafety.safeToRetry, true);
@@ -725,6 +869,7 @@ test('rejects mismatched registry bindings and caps aggregate function history w
   });
   await assert.rejects(orchestrator.run('input', {
     authorizedTools: ['lookup_data'],
+    grantedCapabilities: ['lookup'],
   }), (error) =>
     error.code === 'FUNCTION_RESPONSE_HISTORY_TOO_LARGE' &&
     error.functionResponses.length === 1 &&

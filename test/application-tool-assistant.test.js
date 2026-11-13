@@ -22,6 +22,7 @@ function createHarness({
     description: 'Read an allowlisted value.',
     inputSchema: emptyObjectSchema,
     category: 'read_only',
+    requiredCapabilities: ['lookup'],
     handler,
   });
   const executor = createToolExecutor({ registry });
@@ -42,6 +43,7 @@ function privateContext(overrides = {}) {
     senderId: 'trusted-sender',
     sessionId: 'private:trusted-sender',
     authorizedTools: ['lookup_data'],
+    grantedCapabilities: ['lookup'],
     ...overrides,
   };
 }
@@ -61,6 +63,7 @@ test('constructs a single injected orchestration boundary with the exact registr
     description: 'Read an allowlisted value.',
     inputSchema: emptyObjectSchema,
     category: 'read_only',
+    requiredCapabilities: ['lookup'],
     handler: async () => ({ value: 'ok' }),
   });
   const executor = createToolExecutor({ registry });
@@ -333,6 +336,7 @@ test('preserves an unknown timeout outcome and marks it unsafe to retry', async 
     description: 'Read an allowlisted value.',
     inputSchema: emptyObjectSchema,
     category: 'read_only',
+    requiredCapabilities: ['lookup'],
     handler: async () => new Promise(() => {}),
   });
   const executor = createToolExecutor({ registry, timeoutMs: 10 });

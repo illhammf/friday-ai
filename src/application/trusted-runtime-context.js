@@ -132,7 +132,7 @@ export function createTrustedRuntimeContextProjector({
       if (input.chatType !== 'private') {
         return authorizationPolicy.authorize({
           chatType: input.chatType,
-          requestedCapabilities: capabilities,
+          grantedCapabilities: capabilities,
         });
       }
 
@@ -176,7 +176,7 @@ export function createTrustedRuntimeContextProjector({
         senderId: input.senderId,
         privateSessionId: canonicalPrivateSessionId,
         conversationSessionId: canonicalPrivateSessionId,
-        requestedCapabilities: capabilities,
+        grantedCapabilities: capabilities,
       });
     },
   });

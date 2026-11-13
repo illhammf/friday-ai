@@ -13,7 +13,10 @@ const EMPTY_SCHEMA = {
   additionalProperties: false,
 };
 
-function createRegistry(names = ['lookup_data', 'read_notes']) {
+function createRegistry(
+  names = ['lookup_data', 'read_notes'],
+  capabilityRequirements = {},
+) {
   const registry = createToolRegistry();
   for (const name of names) {
     registry.register({
@@ -21,6 +24,7 @@ function createRegistry(names = ['lookup_data', 'read_notes']) {
       description: `Read ${name}.`,
       inputSchema: EMPTY_SCHEMA,
       category: 'read_only',
+      requiredCapabilities: capabilityRequirements[name] || ['lookup'],
       handler: async () => ({ ok: true }),
     });
   }
@@ -30,7 +34,7 @@ function createRegistry(names = ['lookup_data', 'read_notes']) {
 function createPolicy({
   registry = createRegistry(),
   allowedTools = ['lookup_data'],
-  capabilityToolGrants = { lookup: ['lookup_data'] },
+  knownCapabilities = ['lookup'],
   getPrivateSessionId = (senderId) => `private:${senderId}`,
   isValidSenderId = (senderId) =>
     /^[a-z0-9._+-]+@(?:c\.us|lid|s\.whatsapp\.net)$/i.test(senderId),
@@ -40,7 +44,7 @@ function createPolicy({
     policy: createToolAuthorizationPolicy({
       registry,
       allowedTools,
-      capabilityToolGrants,
+      knownCapabilities,
       getPrivateSessionId,
       isValidSenderId,
     }),
@@ -53,7 +57,7 @@ function privateRuntimeContext(overrides = {}) {
     senderId: 'user@c.us',
     privateSessionId: 'private:user@c.us',
     conversationSessionId: 'private:user@c.us',
-    requestedCapabilities: ['lookup'],
+    grantedCapabilities: ['lookup'],
     ...overrides,
   };
 }
@@ -67,6 +71,7 @@ test('grants an explicitly approved private capability with trusted identity and
   assert.deepEqual(decision.context, {
     conversationType: 'private',
     authorizedTools: ['lookup_data'],
+    grantedCapabilities: ['lookup'],
   });
   assert.deepEqual(decision.identity, { senderId: 'user@c.us' });
   assert.deepEqual(decision.sessionScope, {
@@ -80,11 +85,11 @@ test('grants an explicitly approved private capability with trusted identity and
   assert.equal(Object.isFrozen(decision.sessionScope), true);
 });
 
-test('denies a private conversation with no requested capabilities or grants', () => {
+test('denies a private conversation with no granted capabilities', () => {
   const { policy } = createPolicy();
 
   const noCapabilities = policy.authorize(
-    privateRuntimeContext({ requestedCapabilities: [] }),
+    privateRuntimeContext({ grantedCapabilities: [] }),
   );
   assert.equal(noCapabilities.authorized, false);
   assert.equal(noCapabilities.reason, 'no_explicit_tool_grants');
@@ -92,10 +97,10 @@ test('denies a private conversation with no requested capabilities or grants', (
 
   const emptyGrantPolicy = createPolicy({
     allowedTools: [],
-    capabilityToolGrants: {},
+    knownCapabilities: ['lookup'],
   }).policy;
   const emptyAllowlist = emptyGrantPolicy.authorize(
-    privateRuntimeContext({ requestedCapabilities: [] }),
+    privateRuntimeContext({ grantedCapabilities: [] }),
   );
   assert.equal(emptyAllowlist.authorized, false);
   assert.equal(emptyAllowlist.reason, 'no_explicit_tool_grants');
@@ -108,7 +113,7 @@ test('denies group conversations before considering identity or capability grant
     senderId: 'member@c.us',
     privateSessionId: 'private:member@c.us',
     conversationSessionId: 'group:chat@g.us',
-    requestedCapabilities: ['lookup'],
+    grantedCapabilities: ['lookup'],
   }));
 
   assert.equal(decision.authorized, false);
@@ -201,7 +206,7 @@ test('model-like input cannot inject tool grants or identity fields', () => {
   const modelInput = {
     senderId: 'attacker@c.us',
     authorizedTools: ['lookup_data'],
-    requestedCapabilities: ['lookup'],
+    grantedCapabilities: ['lookup'],
     question: 'Use lookup_data.',
   };
   const modelDecision = policy.authorize(modelInput);
@@ -209,26 +214,37 @@ test('model-like input cannot inject tool grants or identity fields', () => {
   assert.equal(modelDecision.reason, 'invalid_runtime_context');
 });
 
-test('intersects requested application capabilities with fixed allowlisted tools', () => {
+test('grants tools only when all registered requirements are in trusted capability context', () => {
+  const registry = createRegistry(
+    ['lookup_data', 'read_notes'],
+    { read_notes: ['lookup', 'private_context'] },
+  );
   const { policy } = createPolicy({
-    allowedTools: ['lookup_data'],
-    capabilityToolGrants: {
-      lookup: ['lookup_data'],
-      notes: [],
-    },
+    registry,
+    allowedTools: ['lookup_data', 'read_notes'],
+    knownCapabilities: ['lookup', 'private_context'],
   });
+  const partialDecision = policy.authorize(privateRuntimeContext({
+    grantedCapabilities: ['lookup'],
+  }));
+  assert.equal(partialDecision.authorized, true);
+  assert.deepEqual(partialDecision.context.authorizedTools, ['lookup_data']);
+
   const decision = policy.authorize(privateRuntimeContext({
-    requestedCapabilities: ['lookup', 'notes'],
+    grantedCapabilities: ['lookup', 'private_context'],
   }));
 
   assert.equal(decision.authorized, true);
-  assert.deepEqual(decision.context.authorizedTools, ['lookup_data']);
-  assert.equal(decision.context.authorizedTools.includes('read_notes'), false);
+  assert.deepEqual(decision.context.authorizedTools, ['lookup_data', 'read_notes']);
+  assert.deepEqual(
+    decision.context.grantedCapabilities,
+    ['lookup', 'private_context'],
+  );
 });
 
-test('denies unconfigured application capabilities and malformed capability requests', () => {
+test('denies unknown or malformed trusted capability sets', () => {
   const { policy } = createPolicy();
-  for (const requestedCapabilities of [
+  for (const grantedCapabilities of [
     ['unconfigured'],
     'lookup',
     ['lookup', 'lookup'],
@@ -236,30 +252,34 @@ test('denies unconfigured application capabilities and malformed capability requ
     null,
   ]) {
     const decision = policy.authorize(
-      privateRuntimeContext({ requestedCapabilities }),
+      privateRuntimeContext({ grantedCapabilities }),
     );
     assert.equal(decision.authorized, false);
     assert.ok([
-      'unconfigured_application_capability',
-      'invalid_requested_capabilities',
+      'unknown_application_capability',
+      'invalid_granted_capabilities',
     ].includes(decision.reason));
   }
 });
 
-test('rejects grants to unregistered or non-allowlisted tools at policy construction', () => {
-  const registry = createRegistry(['lookup_data']);
+test('rejects unknown capability requirements during policy construction', () => {
+  const registry = createRegistry(
+    ['lookup_data'],
+    { lookup_data: ['unconfigured'] },
+  );
   assert.throws(() => createPolicy({
     registry,
     allowedTools: ['lookup_data'],
-    capabilityToolGrants: { lookup: ['missing_tool'] },
-  }), (error) =>
-    error instanceof ToolAuthorizationPolicyError &&
-    /not in the fixed application allowlist/.test(error.message));
+    knownCapabilities: ['lookup'],
+  }), ToolAuthorizationPolicyError);
+});
 
+test('rejects unregistered allowlist entries at policy construction', () => {
+  const registry = createRegistry(['lookup_data']);
   assert.throws(() => createPolicy({
     registry,
     allowedTools: ['missing_tool'],
-    capabilityToolGrants: {},
+    knownCapabilities: ['lookup'],
   }), /is not registered/);
 });
 
@@ -274,7 +294,7 @@ test('returns isolated immutable context and does not mutate registry or executo
   const decision = policy.authorize(runtimeContext);
 
   runtimeContext.senderId = 'changed@c.us';
-  runtimeContext.requestedCapabilities.push('other');
+  runtimeContext.grantedCapabilities.push('other');
 
   assert.equal(decision.authorized, true);
   assert.equal(decision.identity.senderId, 'user@c.us');
@@ -303,6 +323,7 @@ test('keeps sender and session identifiers out of handler context', async () => 
     description: 'Read an allowlisted value.',
     inputSchema: EMPTY_SCHEMA,
     category: 'read_only',
+    requiredCapabilities: ['lookup'],
     handler: async (_arguments, context) => {
       handlerContext = context;
       return { ok: true };
@@ -319,6 +340,7 @@ test('keeps sender and session identifiers out of handler context', async () => 
   assert.equal('privateSessionId' in handlerContext, false);
   assert.equal('conversationSessionId' in handlerContext, false);
   assert.equal('authorizedTools' in handlerContext, false);
+  assert.equal('grantedCapabilities' in handlerContext, false);
   assert.equal(handlerContext.signal instanceof AbortSignal, true);
 });
 
@@ -351,16 +373,14 @@ test('rejects malformed or duplicate static authorization configuration', () => 
     assert.throws(() => createPolicy({
       registry,
       allowedTools,
-      capabilityToolGrants: {},
+      knownCapabilities: ['lookup'],
     }), ToolAuthorizationPolicyError);
   }
 
   assert.throws(() => createPolicy({
     registry,
     allowedTools: ['lookup_data'],
-    capabilityToolGrants: {
-      'not a capability': ['lookup_data'],
-    },
+    knownCapabilities: ['not a capability'],
   }), ToolAuthorizationPolicyError);
 });
 
@@ -368,13 +388,15 @@ test('default empty allowlist grants no registered tools', () => {
   const registry = createRegistry();
   const policy = createToolAuthorizationPolicy({
     registry,
+    knownCapabilities: ['lookup'],
+    knownCapabilities: ['lookup'],
     getPrivateSessionId: (senderId) => `private:${senderId}`,
     isValidSenderId: (senderId) => senderId === 'user@c.us',
   });
   const decision = policy.authorize(privateRuntimeContext());
 
   assert.equal(decision.authorized, false);
-  assert.equal(decision.reason, 'unconfigured_application_capability');
+  assert.equal(decision.reason, 'no_explicit_tool_grants');
   assert.equal(decision.context, null);
 });
 
@@ -385,13 +407,14 @@ test('refuses to configure grants for action-category tools', () => {
     description: 'Action tool must not be granted.',
     inputSchema: EMPTY_SCHEMA,
     category: 'action',
+    requiredCapabilities: ['action'],
     handler: async () => ({ ok: true }),
   });
 
   assert.throws(() => createToolAuthorizationPolicy({
     registry,
     allowedTools: ['perform_action'],
-    capabilityToolGrants: { action: ['perform_action'] },
+    knownCapabilities: ['action'],
     getPrivateSessionId: (senderId) => `private:${senderId}`,
     isValidSenderId: () => true,
   }), /not registered as read_only/);

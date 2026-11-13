@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { hasRequiredCapabilities } from './tools/tool-permission-policy.js';
 
 const HARD_LIMITS = Object.freeze({
   maxToolRounds: 2,
@@ -351,6 +352,36 @@ function normalizeToolError(error) {
   return { code, message: ERROR_DETAILS[code] };
 }
 
+function getAuthorizedDeclarationNames(trustedContext, registry) {
+  const grants = trustedContext?.authorizedTools;
+  const capabilities = trustedContext?.grantedCapabilities;
+  if (
+    !Array.isArray(grants) ||
+    !Array.isArray(capabilities) ||
+    capabilities.some((capability) =>
+      typeof capability !== 'string' ||
+      !/^[a-z][a-z0-9_]{0,63}$/.test(capability)) ||
+    new Set(capabilities).size !== capabilities.length
+  ) return new Set();
+  const names = new Set();
+  for (const name of grants) {
+    if (
+      typeof name !== 'string' ||
+      !TOOL_NAME_PATTERN.test(name) ||
+      names.has(name) ||
+      !registry.has(name)
+    ) {
+      return new Set();
+    }
+    const metadata = registry.getAuthorizationMetadata?.(name);
+    if (!hasRequiredCapabilities(metadata, capabilities)) {
+      return new Set();
+    }
+    names.add(name);
+  }
+  return names;
+}
+
 export function createToolOrchestrator({
   generator,
   executor,
@@ -407,6 +438,12 @@ export function createToolOrchestrator({
       const knownCallIds = new Set();
       const functionResponses = [];
       const progress = [];
+      const authorizedDeclarationNames = getAuthorizedDeclarationNames(
+        trustedContext,
+        registry,
+      );
+      const declarationsForRequest = declarations.filter(({ name }) =>
+        authorizedDeclarationNames.has(name));
       let completedRounds = 0;
       let totalCalls = 0;
 
@@ -415,7 +452,7 @@ export function createToolOrchestrator({
         try {
           response = await generator({
             input,
-            tools: declarations,
+            tools: declarationsForRequest,
             functionResponses: Object.freeze([...functionResponses]),
           });
         } catch (cause) {
@@ -581,6 +618,22 @@ export function createToolOrchestrator({
                 functionResponses,
               );
             }
+            continue;
+          }
+          if (!authorizedDeclarationNames.has(call.name)) {
+            callProgress.state = 'failed';
+            callProgress.error = {
+              code: 'TOOL_PERMISSION_DENIED',
+              message: ERROR_DETAILS.TOOL_PERMISSION_DENIED,
+            };
+            callProgress.responseIndex = functionResponses.length + roundResponses.length;
+            roundResponses.push(Object.freeze({
+              ...responseBase,
+              error: Object.freeze({
+                code: 'TOOL_PERMISSION_DENIED',
+                message: ERROR_DETAILS.TOOL_PERMISSION_DENIED,
+              }),
+            }));
             continue;
           }
 

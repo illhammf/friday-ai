@@ -90,6 +90,7 @@ function createActualAssistant(generator, handler = async () => ({ ok: true })) 
     description: 'Read an allowlisted value.',
     inputSchema: EMPTY_SCHEMA,
     category: 'read_only',
+    requiredCapabilities: ['lookup'],
     handler,
   });
   const executor = createToolExecutor({ registry });
@@ -107,6 +108,7 @@ const PRIVATE_CONTEXT = {
   sessionId: 'private:test',
   senderId: 'test',
   authorizedTools: ['lookup_data'],
+  grantedCapabilities: ['lookup'],
 };
 const REQUEST = {
   question: 'Find the value.',

@@ -178,7 +178,7 @@ export function createToolExecutor({
 
       const handlerContext = Object.create(null);
       for (const [key, value] of Object.entries(safeContext)) {
-        if (key === 'authorizedTools') continue;
+        if (key === 'authorizedTools' || key === 'grantedCapabilities') continue;
         Object.defineProperty(handlerContext, key, {
           value,
           enumerable: true,

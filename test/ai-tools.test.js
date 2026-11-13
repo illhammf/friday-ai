@@ -32,6 +32,7 @@ function createDefinition(overrides = {}) {
     description: 'Read a safe status value.',
     inputSchema: emptyObjectSchema,
     category: 'read_only',
+    requiredCapabilities: ['read_status'],
     handler: async () => ({ status: 'ok' }),
     ...overrides,
   };
@@ -79,9 +80,33 @@ test('registry rejects duplicate names, invalid names, and incomplete definition
     createDefinition({ inputSchema: null }),
     createDefinition({ category: 'unknown' }),
     createDefinition({ handler: null }),
+    createDefinition({ requiredCapabilities: undefined }),
+    createDefinition({ requiredCapabilities: [] }),
+    createDefinition({ requiredCapabilities: ['lookup', 'lookup'] }),
+    createDefinition({ requiredCapabilities: ['invalid.capability'] }),
   ]) {
     assert.throws(() => createToolRegistry().register(definition));
   }
+});
+
+test('registry freezes application-owned capability requirements separately from declarations', () => {
+  const requiredCapabilities = ['project_read', 'private_context_read'];
+  const registry = createToolRegistry();
+  registry.register(createDefinition({ requiredCapabilities }));
+  requiredCapabilities.push('injected');
+
+  assert.deepEqual(
+    registry.getAuthorizationMetadata('read_status'),
+    {
+      name: 'read_status',
+      category: 'read_only',
+      requiredCapabilities: ['project_read', 'private_context_read'],
+    },
+  );
+  assert.deepEqual(
+    Object.keys(registry.getPublicDeclarations()[0]).sort(),
+    ['description', 'name', 'parametersJsonSchema'],
+  );
 });
 
 test('registry validates public schemas and keeps declarations detached from caller mutation', () => {
@@ -214,20 +239,31 @@ test('validator enforces serialized byte limits and rejects non-JSON data safely
 });
 
 test('permission policy requires explicit read-only authorization and denies other classes', () => {
-  const readOnly = { name: 'read_status', category: 'read_only' };
+  const readOnly = {
+    name: 'read_status',
+    category: 'read_only',
+    requiredCapabilities: ['read_status'],
+  };
   assert.throws(() => assertToolPermission(readOnly), ToolPermissionError);
   assert.throws(
-    () => assertToolPermission(readOnly, { authorizedTools: ['other'] }),
+    () => assertToolPermission(readOnly, {
+      authorizedTools: ['other'],
+      grantedCapabilities: ['read_status'],
+    }),
     ToolPermissionError,
   );
   assert.equal(
-    assertToolPermission(readOnly, { authorizedTools: new Set(['read_status']) }),
+    assertToolPermission(readOnly, {
+      authorizedTools: new Set(['read_status']),
+      grantedCapabilities: ['read_status'],
+    }),
     true,
   );
   for (const category of ['action', 'approval_required', 'unknown']) {
     assert.throws(
       () => assertToolPermission({ name: 'write', category }, {
         authorizedTools: ['write'],
+        grantedCapabilities: ['read_status'],
       }),
       ToolPermissionError,
     );
@@ -257,6 +293,7 @@ test('executor validates, authorizes, and executes only registered tools', async
     { query: 'status' },
     {
       authorizedTools: ['read_status'],
+      grantedCapabilities: ['read_status'],
       chatType: 'private',
       privateSessionId: 'private:user',
     },
@@ -266,6 +303,7 @@ test('executor validates, authorizes, and executes only registered tools', async
   assert.equal(Object.isFrozen(received[0].context), true);
   assert.equal(received[0].context.privateSessionId, 'private:user');
   assert.equal('authorizedTools' in received[0].context, false);
+  assert.equal('grantedCapabilities' in received[0].context, false);
   assert.equal(Object.isFrozen(received[0].args), true);
   await assert.rejects(
     executor.execute('not_registered', {}),
@@ -274,6 +312,7 @@ test('executor validates, authorizes, and executes only registered tools', async
   await assert.rejects(
     executor.execute('read_status', { query: 'x'.repeat(21) }, {
       authorizedTools: ['read_status'],
+      grantedCapabilities: ['read_status'],
     }, { onStarted: () => { started += 1; } }),
     (error) => error.code === 'TOOL_ARGUMENTS_INVALID' &&
       error.executionStarted === false,
@@ -297,6 +336,35 @@ test('executor denies unauthorized tools without invoking handlers', async () =>
     { code: 'TOOL_PERMISSION_DENIED' },
   );
   assert.equal(executions, 0);
+});
+
+test('executor enforces every registered capability requirement at dispatch', async () => {
+  let executions = 0;
+  const registry = createToolRegistry();
+  registry.register(createDefinition({
+    requiredCapabilities: ['project_read', 'private_context_read'],
+    handler: async () => {
+      executions += 1;
+      return { ok: true };
+    },
+  }));
+  const executor = createToolExecutor({ registry });
+  const authorizedTools = ['read_status'];
+
+  await assert.rejects(
+    executor.execute('read_status', {}, {
+      authorizedTools,
+      grantedCapabilities: ['project_read'],
+    }),
+    { code: 'TOOL_PERMISSION_DENIED' },
+  );
+  assert.equal(executions, 0);
+
+  assert.deepEqual(await executor.execute('read_status', {}, {
+    authorizedTools,
+    grantedCapabilities: ['project_read', 'private_context_read'],
+  }), { ok: true });
+  assert.equal(executions, 1);
 });
 
 test('executor reports invalid trusted context as a pre-dispatch denial', async () => {
@@ -327,7 +395,10 @@ test('executor normalizes handler errors without exposing stacks or secrets', as
   const executor = createToolExecutor({ registry });
 
   await assert.rejects(
-    executor.execute('read_status', {}, { authorizedTools: ['read_status'] }),
+    executor.execute('read_status', {}, {
+      authorizedTools: ['read_status'],
+      grantedCapabilities: ['read_status'],
+    }),
     (error) => error.code === 'TOOL_EXECUTION_FAILED' &&
       error.message === 'Tool execution failed.' &&
       !error.stack.includes('private token') &&
@@ -347,11 +418,17 @@ test('executor bounds tool output and rejects non-serializable results', async (
   const executor = createToolExecutor({ registry, maxOutputBytes: 32 });
 
   await assert.rejects(
-    executor.execute('read_status', {}, { authorizedTools: ['read_status'] }),
+    executor.execute('read_status', {}, {
+      authorizedTools: ['read_status'],
+      grantedCapabilities: ['read_status'],
+    }),
     { code: 'TOOL_OUTPUT_TOO_LARGE' },
   );
   await assert.rejects(
-    executor.execute('invalid_result', {}, { authorizedTools: ['invalid_result'] }),
+    executor.execute('invalid_result', {}, {
+      authorizedTools: ['invalid_result'],
+      grantedCapabilities: ['read_status'],
+    }),
     { code: 'TOOL_OUTPUT_INVALID' },
   );
 });
@@ -389,7 +466,10 @@ test('executor reports timeout without claiming to cancel a running handler', as
   const executor = createToolExecutor({ registry, timeoutMs: 10 });
 
   await assert.rejects(
-    executor.execute('read_status', {}, { authorizedTools: ['read_status'] }),
+    executor.execute('read_status', {}, {
+      authorizedTools: ['read_status'],
+      grantedCapabilities: ['read_status'],
+    }),
     (error) => error instanceof ToolExecutionError &&
       error.code === 'TOOL_TIMEOUT' &&
       error.executionStarted === true &&

@@ -484,6 +484,7 @@ test('uses the registry public declaration directly and does not expose handlers
     description: 'Find saved notes.',
     inputSchema: schema,
     category: 'read_only',
+    requiredCapabilities: ['lookup'],
     handler: async () => ({ private: true }),
   });
   const declaration = registry.getPublicDeclarations()[0];

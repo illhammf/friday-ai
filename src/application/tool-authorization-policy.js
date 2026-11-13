@@ -1,9 +1,11 @@
+import { hasRequiredCapabilities } from '../ai/tools/tool-permission-policy.js';
+
 const RUNTIME_CONTEXT_KEYS = new Set([
   'chatType',
   'senderId',
   'privateSessionId',
   'conversationSessionId',
-  'requestedCapabilities',
+  'grantedCapabilities',
 ]);
 
 const CAPABILITY_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
@@ -17,8 +19,8 @@ const DENIAL_REASONS = Object.freeze({
   private_session: 'missing_or_invalid_private_session',
   conversation_session: 'missing_or_invalid_conversation_session',
   scope_mismatch: 'conversation_session_scope_mismatch',
-  capabilities: 'invalid_requested_capabilities',
-  unknown_capability: 'unconfigured_application_capability',
+  capabilities: 'invalid_granted_capabilities',
+  unknown_capability: 'unknown_application_capability',
   no_grants: 'no_explicit_tool_grants',
 });
 
@@ -94,56 +96,6 @@ function denial(reason) {
   });
 }
 
-function normalizeCapabilityGrants(capabilityToolGrants, allowlist, registry) {
-  if (!isPlainRecord(capabilityToolGrants)) {
-    throw new ToolAuthorizationPolicyError(
-      'capabilityToolGrants must be a plain object.',
-    );
-  }
-
-  const grants = new Map();
-  for (const key of Reflect.ownKeys(capabilityToolGrants)) {
-    const descriptor = typeof key === 'string'
-      ? Object.getOwnPropertyDescriptor(capabilityToolGrants, key)
-      : null;
-    if (
-      typeof key !== 'string' ||
-      !CAPABILITY_PATTERN.test(key) ||
-      !descriptor?.enumerable ||
-      !Object.hasOwn(descriptor, 'value')
-    ) {
-      throw new ToolAuthorizationPolicyError(
-        'Capability grants contain an invalid property.',
-      );
-    }
-
-    const toolNames = normalizeNames(
-      descriptor.value,
-      `Tool grants for capability "${key}"`,
-      TOOL_NAME_PATTERN,
-    );
-    for (const toolName of toolNames) {
-      if (!allowlist.has(toolName)) {
-        throw new ToolAuthorizationPolicyError(
-          `Tool "${toolName}" is not in the fixed application allowlist.`,
-        );
-      }
-      if (!registry.has(toolName)) {
-        throw new ToolAuthorizationPolicyError(
-          `Tool "${toolName}" is not registered.`,
-        );
-      }
-      if (registry.get(toolName)?.category !== 'read_only') {
-        throw new ToolAuthorizationPolicyError(
-          `Tool "${toolName}" is not registered as read_only.`,
-        );
-      }
-    }
-    grants.set(key, toolNames);
-  }
-  return grants;
-}
-
 /**
  * Builds an immutable, least-privilege tool authorization decision from
  * application-owned normalized runtime context.
@@ -151,7 +103,7 @@ function normalizeCapabilityGrants(capabilityToolGrants, allowlist, registry) {
 export function createToolAuthorizationPolicy({
   registry,
   allowedTools = [],
-  capabilityToolGrants = {},
+  knownCapabilities = [],
   getPrivateSessionId,
   isValidSenderId,
 } = {}) {
@@ -159,7 +111,8 @@ export function createToolAuthorizationPolicy({
     !registry ||
     typeof registry.get !== 'function' ||
     typeof registry.has !== 'function' ||
-    typeof registry.getPublicDeclarations !== 'function'
+    typeof registry.getPublicDeclarations !== 'function' ||
+    typeof registry.getAuthorizationMetadata !== 'function'
   ) {
     throw new ToolAuthorizationPolicyError(
       'A tool registry is required.',
@@ -181,19 +134,45 @@ export function createToolAuthorizationPolicy({
     'allowedTools',
     TOOL_NAME_PATTERN,
   );
-  const allowlist = new Set(configuredAllowlist);
+  const capabilities = normalizeNames(
+    knownCapabilities,
+    'knownCapabilities',
+    CAPABILITY_PATTERN,
+  );
+  const knownCapabilitySet = new Set(capabilities);
+  const declarations = registry.getPublicDeclarations();
+  if (!Array.isArray(declarations)) {
+    throw new ToolAuthorizationPolicyError(
+      'Registry public declarations must be an array.',
+    );
+  }
+  for (const { name } of declarations) {
+    const metadata = registry.getAuthorizationMetadata(name);
+    if (
+      !metadata ||
+      !Array.isArray(metadata.requiredCapabilities) ||
+      metadata.requiredCapabilities.length === 0 ||
+      metadata.requiredCapabilities.some((capability) =>
+        !knownCapabilitySet.has(capability))
+    ) {
+      throw new ToolAuthorizationPolicyError(
+        `Tool "${name}" has missing or unknown capability requirements.`,
+      );
+    }
+  }
   for (const toolName of configuredAllowlist) {
     if (!registry.has(toolName)) {
       throw new ToolAuthorizationPolicyError(
         `Allowlisted tool "${toolName}" is not registered.`,
       );
     }
+    const metadata = registry.getAuthorizationMetadata(toolName);
+    if (metadata?.category !== 'read_only') {
+      throw new ToolAuthorizationPolicyError(
+        `Tool "${toolName}" is not registered as read_only.`,
+      );
+    }
   }
-  const grants = normalizeCapabilityGrants(
-    capabilityToolGrants,
-    allowlist,
-    registry,
-  );
 
   return Object.freeze({
     authorize(runtimeContext) {
@@ -249,38 +228,37 @@ export function createToolAuthorizationPolicy({
         return denial(DENIAL_REASONS.scope_mismatch);
       }
 
-      let requestedCapabilities;
+      let grantedCapabilities;
       try {
-        requestedCapabilities = normalizeNames(
-          input.requestedCapabilities,
-          'requestedCapabilities',
+        grantedCapabilities = normalizeNames(
+          input.grantedCapabilities,
+          'grantedCapabilities',
           CAPABILITY_PATTERN,
         );
       } catch {
         return denial(DENIAL_REASONS.capabilities);
       }
-
-      const requestedTools = new Set();
-      for (const capability of requestedCapabilities) {
-        const capabilityTools = grants.get(capability);
-        if (!capabilityTools) {
-          return denial(DENIAL_REASONS.unknown_capability);
-        }
-        for (const toolName of capabilityTools) {
-          if (allowlist.has(toolName) && registry.has(toolName)) {
-            requestedTools.add(toolName);
-          }
-        }
+      if (grantedCapabilities.some((capability) =>
+        !knownCapabilitySet.has(capability))
+      ) {
+        return denial(DENIAL_REASONS.unknown_capability);
       }
 
-      if (requestedTools.size === 0) {
+      const eligibleTools = configuredAllowlist.filter((toolName) =>
+        hasRequiredCapabilities(
+          registry.getAuthorizationMetadata(toolName),
+          grantedCapabilities,
+        ));
+
+      if (eligibleTools.length === 0) {
         return denial(DENIAL_REASONS.no_grants);
       }
 
-      const authorizedTools = Object.freeze([...requestedTools]);
+      const authorizedTools = Object.freeze(eligibleTools);
       const context = Object.freeze({
         conversationType: 'private',
         authorizedTools,
+        grantedCapabilities,
       });
 
       return Object.freeze({
