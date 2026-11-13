@@ -195,7 +195,8 @@ test('rejects invalid DTO before provider generation or tool execution', async (
     metadata: { conversationType: 'private' },
   }), (error) =>
     error instanceof ToolOrchestrationError &&
-    error.code === 'GENERATOR_FAILED' &&
+    error.code === 'INVALID_ASSISTANT_REQUEST' &&
+    error.kind === 'protocol' &&
     error.executionProgress.hasExecutionStarted === false &&
     error.retrySafety.safeToRetry === true,
   );
@@ -204,17 +205,29 @@ test('rejects invalid DTO before provider generation or tool execution', async (
 
 test('distinguishes provider failure before execution and malformed provider calls', async () => {
   const registry = createRegistry();
-  for (const generateContent of [
-    async () => { throw new Error('provider credentials'); },
-    async () => ({
-      functionCalls: [{ id: 'bad', name: 'lookup_data', args: [] }],
-    }),
-    async () => ({
-      functionCalls: [
-        { id: 'duplicate', name: 'lookup_data', args: {} },
-        { id: 'duplicate', name: 'lookup_data', args: {} },
-      ],
-    }),
+  for (const { generateContent, expectedCode, expectedKind } of [
+    {
+      generateContent: async () => { throw new Error('provider credentials'); },
+      expectedCode: 'GENERATOR_FAILED',
+      expectedKind: 'provider',
+    },
+    {
+      generateContent: async () => ({
+        functionCalls: [{ id: 'bad', name: 'lookup_data', args: [] }],
+      }),
+      expectedCode: 'INVALID_GEMINI_RESPONSE',
+      expectedKind: 'protocol',
+    },
+    {
+      generateContent: async () => ({
+        functionCalls: [
+          { id: 'duplicate', name: 'lookup_data', args: {} },
+          { id: 'duplicate', name: 'lookup_data', args: {} },
+        ],
+      }),
+      expectedCode: 'INVALID_GEMINI_RESPONSE',
+      expectedKind: 'protocol',
+    },
   ]) {
     let executions = 0;
     const perCaseRegistry = createRegistry(async () => {
@@ -226,7 +239,8 @@ test('distinguishes provider failure before execution and malformed provider cal
       generateContent,
     });
     await assert.rejects(orchestrator.run(createRequest()), (error) =>
-      error.code === 'GENERATOR_FAILED' &&
+      error.code === expectedCode &&
+      error.kind === expectedKind &&
       error.executionProgress.hasExecutionStarted === false &&
       error.retrySafety.safeToRetry === true,
     );
@@ -437,4 +451,3 @@ test('refuses malformed function history before calling the provider', async () 
   );
   assert.equal(providerCalls, 0);
 });
-

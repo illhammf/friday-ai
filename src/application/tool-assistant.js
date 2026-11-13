@@ -33,6 +33,7 @@ export class ToolAssistantError extends Error {
     functionResponses = [],
     retrySafety = NOT_STARTED_PROGRESS.retrySafety,
     hasUncertainOutcome = false,
+    providerFailure = null,
     cause,
   }) {
     super(message, cause === undefined ? undefined : { cause });
@@ -43,6 +44,7 @@ export class ToolAssistantError extends Error {
     this.functionResponses = functionResponses;
     this.retrySafety = retrySafety;
     this.hasUncertainOutcome = hasUncertainOutcome;
+    this.providerFailure = providerFailure;
   }
 }
 
@@ -160,6 +162,9 @@ function normalizeOrchestrationError(error) {
         : Object.freeze([]),
       retrySafety,
       hasUncertainOutcome,
+      providerFailure: error?.providerFailure ||
+        error?.cause?.providerFailure ||
+        null,
       cause: error,
     },
   );

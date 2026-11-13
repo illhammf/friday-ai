@@ -13,6 +13,7 @@ const MAX_ARGUMENT_BYTES = 4096;
 const MAX_RESULT_BYTES = 8192;
 const MAX_TEXT_BYTES = 32 * 1024;
 const MAX_FUNCTION_HISTORY_BYTES = 64 * 1024;
+const RETRYABLE_PROVIDER_STATUSES = new Set([429, 500, 502, 503, 504]);
 const TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 const SAFE_TOOL_ERRORS = Object.freeze({
   TOOL_NOT_FOUND: 'Requested tool is not available.',
@@ -30,11 +31,43 @@ const RESERVED_CONFIG_KEYS = new Set([
 ]);
 
 export class GeminiToolAdapterError extends Error {
-  constructor(code, message) {
-    super(message);
+  constructor(code, message, {
+    cause,
+    providerFailure = null,
+    kind = 'protocol',
+  } = {}) {
+    super(message, cause === undefined ? undefined : { cause });
     this.name = 'GeminiToolAdapterError';
     this.code = code;
+    this.providerFailure = providerFailure;
+    this.kind = kind;
   }
+}
+
+function getProviderFailureMetadata(error, model) {
+  const rawStatus = error?.status;
+  const rawCode = error?.code;
+  const status = Number.isInteger(rawStatus)
+    ? rawStatus
+    : typeof rawStatus === 'string' && /^\d{3}$/.test(rawStatus)
+      ? Number(rawStatus)
+      : null;
+  const code = Number.isInteger(rawCode)
+    ? rawCode
+    : typeof rawCode === 'string' && /^\d{3}$/.test(rawCode)
+      ? Number(rawCode)
+      : typeof rawCode === 'string'
+        ? rawCode.slice(0, 128)
+        : null;
+  const retryStatus = status ?? (Number.isInteger(code) ? code : null);
+
+  return Object.freeze({
+    providerId: 'google-gemini',
+    modelId: model,
+    status,
+    code,
+    retryable: RETRYABLE_PROVIDER_STATUSES.has(retryStatus),
+  });
 }
 
 function assertPlainObject(value, label) {
@@ -725,10 +758,15 @@ export function createGeminiToolGenerator({
     let response;
     try {
       response = await generateContent(request);
-    } catch {
+    } catch (cause) {
       throw new GeminiToolAdapterError(
         'GEMINI_GENERATION_FAILED',
         'Gemini generation failed.',
+        {
+          cause,
+          providerFailure: getProviderFailureMetadata(cause, model),
+          kind: 'provider',
+        },
       );
     }
     return readResponse(response, nextGeneratedId);

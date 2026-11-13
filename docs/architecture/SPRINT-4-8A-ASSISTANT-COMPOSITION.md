@@ -106,7 +106,7 @@ not retry or fall back, and it does not restart an orchestration. In
 particular, successful function responses remain available when a later
 provider generation fails, and timeout uncertainty is preserved.
 
-## Provider-selection requirements for Sprint 4.8B
+## Provider-selection requirements and Sprint 4.8B outcome
 
 The legacy `generateWithRetry()` and `generateWithModelFallback()` remain
 unchanged and continue to serve the old text-only path. They must not wrap the
@@ -114,12 +114,15 @@ whole tool orchestration. The Gemini adapter currently normalizes provider
 errors and the orchestrator classifies generator failures as `kind: 'provider'`;
 the legacy fallback classifier does not consume `retrySafety`.
 
-Before any future tool dispatch, a provider-selection layer may choose a
-provider/model and create one pinned generator. No automatic retry or fallback
-is implemented here. Once the first handler starts, the caller must not
-replay orchestration or switch provider/model. Provider-selection and fallback
-policy must be separately designed and tested against structured progress in
-Sprint 4.8B.
+Sprint 4.8B adds a separate decision-only policy in
+`src/application/tool-provider-policy.js`. It selects and pins one generator
+for an orchestration and allows an explicit alternate selection only for a
+recognized retryable provider failure with valid request state and structured
+progress proving no handler started. It never retries or invokes the
+orchestrator. Once a handler starts or execution is uncertain, provider
+switching is denied. See
+[SPRINT-4-8B-STATE-AWARE-PROVIDER-POLICY.md](./SPRINT-4-8B-STATE-AWARE-PROVIDER-POLICY.md)
+for the contract and limitations.
 
 ## Persistence ownership
 

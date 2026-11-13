@@ -383,16 +383,32 @@ test('rejects unsupported declarations and unsafe generation configuration', asy
 });
 
 test('normalizes provider failures and prevents SDK automatic function execution', async () => {
+  const providerCause = Object.assign(
+    new Error('private API key detail'),
+    { status: 503, code: 'UNAVAILABLE' },
+  );
   const failed = createAdapter({
     generateContent: async () => {
-      throw new Error('private API key detail');
+      throw providerCause;
     },
   }).adapter;
   await assert.rejects(
     failed({ input: 'Question.', tools: [] }),
-    (error) => error.code === 'GEMINI_GENERATION_FAILED' &&
-      error.message === 'Gemini generation failed.' &&
-      !error.message.includes('API key'),
+    (error) => {
+      assert.equal(error.code, 'GEMINI_GENERATION_FAILED');
+      assert.equal(error.message, 'Gemini generation failed.');
+      assert.equal(error.message.includes('API key'), false);
+      assert.equal(error.kind, 'provider');
+      assert.equal(error.cause, providerCause);
+      assert.deepEqual(error.providerFailure, {
+        providerId: 'google-gemini',
+        modelId: 'gemini-test',
+        status: 503,
+        code: 'UNAVAILABLE',
+        retryable: true,
+      });
+      return true;
+    },
   );
 
   let generationCount = 0;

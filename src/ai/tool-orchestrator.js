@@ -27,15 +27,18 @@ export class ToolOrchestrationError extends Error {
       executionProgress = null,
       functionResponses = [],
       retrySafety = null,
+      cause,
+      providerFailure = null,
     } = {},
   ) {
-    super(message);
+    super(message, cause === undefined ? undefined : { cause });
     this.name = 'ToolOrchestrationError';
     this.code = code;
     this.kind = kind;
     this.executionProgress = executionProgress;
     this.functionResponses = functionResponses;
     this.retrySafety = retrySafety;
+    this.providerFailure = providerFailure;
   }
 }
 
@@ -87,7 +90,15 @@ function snapshotProgress(requestId, calls) {
   });
 }
 
-function orchestrationFailure(code, message, kind, requestId, progress, responses) {
+function orchestrationFailure(
+  code,
+  message,
+  kind,
+  requestId,
+  progress,
+  responses,
+  { cause, providerFailure = null } = {},
+) {
   const executionProgress = snapshotProgress(requestId, progress);
   const functionResponses = Object.freeze([...responses]);
   return new ToolOrchestrationError(code, message, {
@@ -95,6 +106,8 @@ function orchestrationFailure(code, message, kind, requestId, progress, response
     executionProgress,
     functionResponses,
     retrySafety: executionProgress.retrySafety,
+    cause,
+    providerFailure,
   });
 }
 
@@ -405,14 +418,27 @@ export function createToolOrchestrator({
             tools: declarations,
             functionResponses: Object.freeze([...functionResponses]),
           });
-        } catch {
+        } catch (cause) {
+          const isAdapterProtocolFailure =
+            cause?.name === 'GeminiToolAdapterError' &&
+            cause.kind === 'protocol';
           throw orchestrationFailure(
-            'GENERATOR_FAILED',
-            'The response generator failed.',
-            'provider',
+            isAdapterProtocolFailure
+              ? cause.code || 'INVALID_GENERATOR_RESPONSE'
+              : 'GENERATOR_FAILED',
+            isAdapterProtocolFailure
+              ? cause.message || 'The response generator returned an invalid response.'
+              : 'The response generator failed.',
+            isAdapterProtocolFailure ? 'protocol' : 'provider',
             requestId,
             progress,
             functionResponses,
+            {
+              cause,
+              providerFailure: isAdapterProtocolFailure
+                ? null
+                : cause?.providerFailure || null,
+            },
           );
         }
 
