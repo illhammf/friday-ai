@@ -52,6 +52,67 @@ export function classifyConversationError(error, stage = '') {
     : 'internal_error';
 }
 
+const RETRYABLE_PROVIDER_STATUSES = new Set([429, 500, 502, 503, 504]);
+const SAFE_PROVIDER_ERROR_CODES = new Set([
+  'ABORTED',
+  'CANCELLED',
+  'DATA_LOSS',
+  'DEADLINE_EXCEEDED',
+  'FAILED_PRECONDITION',
+  'INTERNAL',
+  'INVALID_ARGUMENT',
+  'NOT_FOUND',
+  'OUT_OF_RANGE',
+  'PERMISSION_DENIED',
+  'RESOURCE_EXHAUSTED',
+  'UNAUTHENTICATED',
+  'UNAVAILABLE',
+  'UNIMPLEMENTED',
+  'UNKNOWN',
+]);
+
+/** Returns only bounded, allowlisted provider diagnostics; never returns error text. */
+export function getSafeProviderErrorMetadata(error, {
+  providerId = 'google-gemini',
+  modelId,
+  handlerExecutionStarted = false,
+} = {}) {
+  const rawCode = error?.code ?? error?.error?.code;
+  const statusValue = error?.status ?? error?.response?.status ??
+    error?.error?.status ??
+    (Number.isInteger(rawCode) && rawCode >= 100 && rawCode <= 599 ? rawCode : undefined);
+  const status = Number.isInteger(statusValue)
+    ? statusValue
+    : typeof statusValue === 'string' && /^\d{3}$/.test(statusValue)
+      ? Number(statusValue)
+      : null;
+  const normalizedCode = typeof rawCode === 'string' ? rawCode.toUpperCase() : null;
+  const code = typeof rawCode === 'number' && Number.isInteger(rawCode) && rawCode >= 100 && rawCode <= 599
+    ? String(rawCode)
+    : SAFE_PROVIDER_ERROR_CODES.has(normalizedCode)
+      ? normalizedCode
+      : null;
+  const rawName = error?.name;
+  const errorName = typeof rawName === 'string' && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(rawName)
+    ? rawName
+    : 'Error';
+  const metadata = {
+    providerId: providerId === 'google-gemini' ? providerId : 'unknown',
+    handlerExecutionStarted: handlerExecutionStarted === true,
+    errorName,
+  };
+
+  if (typeof modelId === 'string' && /^[A-Za-z0-9._/-]{1,100}$/.test(modelId)) {
+    metadata.modelId = modelId;
+  }
+  if (status !== null) {
+    metadata.httpStatus = status;
+    metadata.retryable = RETRYABLE_PROVIDER_STATUSES.has(status);
+  }
+  if (code !== null) metadata.providerErrorCode = code;
+  return Object.freeze(metadata);
+}
+
 export function isConversationErrorCategory(value) {
   return ERROR_CATEGORIES.has(value);
 }

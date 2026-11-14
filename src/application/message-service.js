@@ -86,6 +86,24 @@ export function createMessageService(dependencies) {
         ...(Number.isFinite(metadata.outputTokens) ? { outputTokens: metadata.outputTokens } : {}),
         ...(Number.isFinite(metadata.totalTokens) ? { totalTokens: metadata.totalTokens } : {}),
         ...(typeof metadata.operation === 'string' ? { operation: metadata.operation.slice(0, 80) } : {}),
+        ...(metadata.providerId === 'google-gemini' ? { providerId: metadata.providerId } : {}),
+        ...(typeof metadata.modelId === 'string' && /^[A-Za-z0-9._/-]{1,100}$/.test(metadata.modelId)
+          ? { modelId: metadata.modelId }
+          : {}),
+        ...(typeof metadata.nextModelId === 'string' && /^[A-Za-z0-9._/-]{1,100}$/.test(metadata.nextModelId)
+          ? { nextModelId: metadata.nextModelId }
+          : {}),
+        ...(typeof metadata.errorName === 'string' && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(metadata.errorName)
+          ? { errorName: metadata.errorName }
+          : {}),
+        ...(Number.isInteger(metadata.httpStatus) ? { httpStatus: metadata.httpStatus } : {}),
+        ...(typeof metadata.providerErrorCode === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(metadata.providerErrorCode)
+          ? { providerErrorCode: metadata.providerErrorCode }
+          : {}),
+        ...(typeof metadata.retryable === 'boolean' ? { retryable: metadata.retryable } : {}),
+        ...(typeof metadata.handlerExecutionStarted === 'boolean'
+          ? { handlerExecutionStarted: metadata.handlerExecutionStarted }
+          : {}),
       });
     };
     const logError = (operation, error) => emitStage(

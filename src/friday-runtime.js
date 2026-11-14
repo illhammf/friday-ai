@@ -64,7 +64,10 @@ import {
 import { createMessageService } from './application/message-service.js';
 import { createCommandRouter } from './application/command-router.js';
 import { createApplication } from './application/application-lifecycle.js';
-import { classifyConversationError } from './application/conversation-observability.js';
+import {
+  classifyConversationError,
+  getSafeProviderErrorMetadata,
+} from './application/conversation-observability.js';
 import { createRuntimeReadinessGate } from './application/runtime-readiness.js';
 import {
   generateWithModelFallback,
@@ -121,16 +124,26 @@ async function generateWithRetry(model, contents, config, logStage) {
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      logStage?.('ai_provider_attempt', 'started');
+      const providerContext = {
+        providerId: 'google-gemini',
+        modelId: model,
+        handlerExecutionStarted: false,
+      };
+      logStage?.('ai_provider_attempt', 'started', undefined, providerContext);
       const response = await ai.models.generateContent({
         model,
         contents,
         config,
       });
-      logStage?.('ai_provider_attempt', 'completed');
+      logStage?.('ai_provider_attempt', 'completed', undefined, providerContext);
       return response;
     } catch (error) {
-      logStage?.('ai_provider_attempt', 'failed', error);
+      logStage?.('ai_provider_attempt', 'failed', error,
+        getSafeProviderErrorMetadata(error, {
+          providerId: 'google-gemini',
+          modelId: model,
+          handlerExecutionStarted: false,
+        }));
       if (!isTemporaryGeminiError(error) || attempt === maxAttempts) {
         throw error;
       }
@@ -141,7 +154,12 @@ async function generateWithRetry(model, contents, config, logStage) {
 
       const delayMs = 1500 * attempt;
 
-      logStage?.('ai_retry_scheduled', 'continued', error);
+      logStage?.('ai_retry_scheduled', 'continued', error,
+        getSafeProviderErrorMetadata(error, {
+          providerId: 'google-gemini',
+          modelId: model,
+          handlerExecutionStarted: false,
+        }));
 
       await sleep(delayMs);
     }
@@ -246,9 +264,25 @@ function safeConversationLogMetadata(fields) {
       .filter((key) => Number.isFinite(fields[key]))
       .map((key) => [key, fields[key]]),
   );
-  return typeof fields.operation === 'string'
-    ? { ...numeric, operation: fields.operation.slice(0, 80) }
-    : numeric;
+  const metadata = { ...numeric };
+  for (const key of ['providerId', 'modelId', 'nextModelId', 'errorName', 'providerErrorCode']) {
+    const value = fields[key];
+    if (
+      typeof value === 'string' &&
+      value.length <= 100 &&
+      /^[A-Za-z0-9_.\/-]+$/.test(value) &&
+      (key !== 'providerId' || value === 'google-gemini')
+    ) {
+      metadata[key] = value;
+    }
+  }
+  if (Number.isInteger(fields.httpStatus)) metadata.httpStatus = fields.httpStatus;
+  if (typeof fields.retryable === 'boolean') metadata.retryable = fields.retryable;
+  if (typeof fields.handlerExecutionStarted === 'boolean') {
+    metadata.handlerExecutionStarted = fields.handlerExecutionStarted;
+  }
+  if (typeof fields.operation === 'string') metadata.operation = fields.operation.slice(0, 80);
+  return metadata;
 }
 
   // Fungsi utama untuk mengajukan pertanyaan ke FRIDAY dan mendapatkan jawaban.
@@ -320,8 +354,15 @@ function safeConversationLogMetadata(fields) {
       MODELS,
       (model) => generateWithRetry(model, contents, config, logStage),
       {
-        onFallback: ({ error }) => {
-          logStage?.('ai_model_fallback', 'continued', error);
+        onFallback: ({ model, nextModel, error }) => {
+          logStage?.('ai_model_fallback', 'continued', error, {
+            ...getSafeProviderErrorMetadata(error, {
+              providerId: 'google-gemini',
+              modelId: model,
+              handlerExecutionStarted: false,
+            }),
+            nextModelId: nextModel,
+          });
         },
       },
     );

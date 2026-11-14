@@ -24,7 +24,7 @@ function createRawMessage(overrides = {}) {
     timestamp: 123,
     hasMedia: false,
     _data: {},
-    reply: async (text) => text,
+    reply: async (text) => ({ id: { _serialized: `outgoing-${text}` } }),
     ...overrides,
   };
 }
@@ -182,13 +182,14 @@ test('adapts replies and all currently implemented outbound media types', async 
   });
 
   const replyCall = [];
+  const replyResult = { id: 'resolved-message-result' };
   const reply = adapters.reply({
     reply: async (text) => {
       replyCall.push(text);
-      return 'reply-sent';
+      return replyResult;
     },
   });
-  assert.equal(await reply('Hello'), 'reply-sent');
+  assert.equal(await reply('Hello'), replyResult);
   assert.deepEqual(replyCall, ['Hello']);
 
   await adapters.deliver.sendVideo(
@@ -256,7 +257,7 @@ test('propagates outbound WhatsApp client failures to the application caller', a
   );
 });
 
-function createService(calls) {
+function createService(calls, stages = []) {
   return createMessageService({
     botName: 'Friday',
     getReadyAt: () => 100,
@@ -322,6 +323,7 @@ function createService(calls) {
     logger: {
       event: () => {},
       error: (label, error) => calls.push(['error', label, error?.message]),
+      stage: (stage, fields) => stages.push({ stage, ...fields }),
     },
   });
 }
@@ -332,7 +334,7 @@ test('integrates event queue, deduplication, normalization, service, and reply a
   const deduplicator = createMessageDeduplicator();
   const calls = [];
   const stages = [];
-  const service = createService(calls);
+  const service = createService(calls, stages);
   let accepted = true;
 
   registerQueuedMessageHandler(client, {
@@ -420,6 +422,10 @@ test('integrates event queue, deduplication, normalization, service, and reply a
   assert.equal(correlationIds.size, 2);
   assert.ok(stages.some(({ stage, outcome, correlationId }) =>
     stage === 'message_processing_started' && outcome === 'started' && correlationIds.has(correlationId)));
+  const replySubmissions = stages.filter(({ stage, outcome }) =>
+    stage === 'reply_submission' && outcome === 'submitted');
+  assert.equal(replySubmissions.length, 2);
+  assert.ok(replySubmissions.every(({ category }) => category === undefined));
   assert.equal(JSON.stringify(stages).includes('Hello Friday'), false);
 });
 
