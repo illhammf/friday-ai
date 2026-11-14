@@ -70,6 +70,45 @@ test('starts injected resources in order and returns them', async () => {
   assert.equal(application.state, 'running');
 });
 
+test('concurrent and repeated startup calls create and initialize one client once', async () => {
+  let configureCount = 0;
+  let initializeCount = 0;
+  let createCount = 0;
+  const { application } = createHarness({
+    createClient: async () => {
+      createCount += 1;
+      return { initialize: async () => {}, destroy: async () => {} };
+    },
+    configureClient: async (client) => {
+      configureCount += 1;
+      client.on = (event, handler) => {
+        client.listeners ||= new Map();
+        client.listeners.set(event, [...(client.listeners.get(event) || []), handler]);
+      };
+      client.listenerCount = (event) => client.listeners?.get(event)?.length || 0;
+      client.on('ready', () => {});
+      client.on('message', () => {});
+    },
+    initializeClient: async () => { initializeCount += 1; },
+  });
+
+  const [first, second, third] = await Promise.all([
+    application.start(),
+    application.start(),
+    application.start(),
+  ]);
+  const repeated = await application.start();
+
+  assert.equal(first.client, second.client);
+  assert.equal(first.client, third.client);
+  assert.equal(first.client, repeated.client);
+  assert.equal(createCount, 1);
+  assert.equal(configureCount, 1);
+  assert.equal(initializeCount, 1);
+  assert.equal(first.client.listenerCount('ready'), 1);
+  assert.equal(first.client.listenerCount('message'), 1);
+});
+
 test('does not initialize the client when database construction fails', async () => {
   const databaseError = new Error('database unavailable');
   const { calls, application } = createHarness({

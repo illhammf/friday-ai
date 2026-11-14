@@ -1,0 +1,79 @@
+diff --git a/node_modules/whatsapp-web.js/src/Client.js b/node_modules/whatsapp-web.js/src/Client.js
+--- a/node_modules/whatsapp-web.js/src/Client.js
++++ b/node_modules/whatsapp-web.js/src/Client.js
+@@ -492,15 +492,38 @@
+ 
+         await this.inject();
+ 
++        let frameNavigationInjection;
+         this.pupPage.on('framenavigated', async (frame) => {
+-            if (frame.url().includes('post_logout=1') || this.lastLoggedOut) {
+-                this.emit(Events.DISCONNECTED, 'LOGOUT');
+-                await this.authStrategy.logout();
+-                await this.authStrategy.beforeBrowserInitialized();
+-                await this.authStrategy.afterBrowserInitialized();
+-                this.lastLoggedOut = false;
++            // WhatsApp's main page owns the injected API. Subframe navigation
++            // must not start a second injection into the same Puppeteer Page.
++            if (frame !== this.pupPage.mainFrame()) {
++                return;
+             }
+-            await this.inject();
++            // Multiple main-frame events can overlap during reload/logout. Keep
++            // one injection in flight so exposed bindings and WA listeners are
++            // not registered by competing inject() calls.
++            if (frameNavigationInjection) {
++                return;
++            }
++
++            const injection = (async () => {
++                if (frame.url().includes('post_logout=1') || this.lastLoggedOut) {
++                    this.emit(Events.DISCONNECTED, 'LOGOUT');
++                    await this.authStrategy.logout();
++                    await this.authStrategy.beforeBrowserInitialized();
++                    await this.authStrategy.afterBrowserInitialized();
++                    this.lastLoggedOut = false;
++                }
++                await this.inject();
++            })();
++            frameNavigationInjection = injection;
++            try {
++                await injection;
++            } finally {
++                if (frameNavigationInjection === injection) {
++                    frameNavigationInjection = null;
++                }
++            }
+         });
+     }
+ 
+diff --git a/node_modules/whatsapp-web.js/src/util/Puppeteer.js b/node_modules/whatsapp-web.js/src/util/Puppeteer.js
+--- a/node_modules/whatsapp-web.js/src/util/Puppeteer.js
++++ b/node_modules/whatsapp-web.js/src/util/Puppeteer.js
+@@ -17,7 +17,25 @@
+     if (exist) {
+         return;
+     }
+-    await page.exposeFunction(name, fn);
++    try {
++        await page.exposeFunction(name, fn);
++    } catch (error) {
++        const duplicateBindingMessage =
++            `Failed to add page binding with name ${name}: window['${name}'] already exists!`;
++        if (error?.message !== duplicateBindingMessage) {
++            throw error;
++        }
++
++        // Puppeteer retains page bindings across navigations. The binding can
++        // already be registered internally before its function appears in the
++        // new document's window; wait for that registration instead of trying
++        // to expose the same page binding again.
++        await page.waitForFunction(
++            (bindingName) => typeof window[bindingName] === 'function',
++            { timeout: 5000 },
++            name,
++        );
++    }
+ }
+ 
+ module.exports = { exposeFunctionIfAbsent };
