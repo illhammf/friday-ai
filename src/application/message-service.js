@@ -76,6 +76,8 @@ export function createMessageService(dependencies) {
     const correlationId = message.correlationId || createConversationCorrelationId();
     let outboundAttempted = false;
     let failureStageLogged = false;
+    let pendingUserTurn = null;
+    let pendingUserTurnSaved = false;
     const emitStage = (stage, outcome, error, metadata = {}) => {
       dependencies.logger?.stage?.(stage, {
         correlationId,
@@ -112,6 +114,27 @@ export function createMessageService(dependencies) {
       error?.error || error,
       { operation },
     );
+    const persistPendingUserTurn = async () => {
+      if (
+        !pendingUserTurn ||
+        pendingUserTurnSaved ||
+        !pendingUserTurn.content.trim()
+      ) return;
+      pendingUserTurnSaved = true;
+      try {
+        if (typeof dependencies.history.save !== 'function') {
+          throw new TypeError('A user-message history writer is required.');
+        }
+        await dependencies.history.save(
+          pendingUserTurn.sessionId,
+          'user',
+          pendingUserTurn.content,
+        );
+        emitStage('inbound_history_persistence', 'succeeded');
+      } catch (error) {
+        emitStage('inbound_history_persistence', 'failed', error);
+      }
+    };
     const submitReply = async (text) => {
       outboundAttempted = true;
       emitStage('reply_submission', 'started');
@@ -119,9 +142,11 @@ export function createMessageService(dependencies) {
         const result = await transport.reply(text);
         emitStage('reply_submission', result == null ? 'uncertain' : 'submitted',
           result == null ? Object.assign(new Error('Reply result is missing.'), { code: 'TRANSPORT_UNCERTAIN' }) : undefined);
+        if (result == null) await persistPendingUserTurn();
         return result;
       } catch (error) {
         emitStage('reply_submission', 'uncertain', error);
+        await persistPendingUserTurn();
         throw error;
       }
     };
@@ -132,9 +157,11 @@ export function createMessageService(dependencies) {
         const result = await send();
         emitStage(stage, result == null ? 'uncertain' : 'submitted',
           result == null ? Object.assign(new Error('Outbound result is missing.'), { code: 'TRANSPORT_UNCERTAIN' }) : undefined);
+        if (result == null) await persistPendingUserTurn();
         return result;
       } catch (error) {
         emitStage(stage, 'uncertain', error);
+        await persistPendingUserTurn();
         throw error;
       }
     };
@@ -295,6 +322,10 @@ export function createMessageService(dependencies) {
         return;
       }
 
+      pendingUserTurn = {
+        sessionId: activeSessionId,
+        content: isGroup ? `${senderName}: ${question}` : question,
+      };
       activeSessions.add(activeSessionId);
 
       try {
@@ -373,6 +404,7 @@ export function createMessageService(dependencies) {
           question = question
             ? `${question}\n\nIsi Voice Note: ${transcript}`
             : transcript;
+          pendingUserTurn.content = isGroup ? `${senderName}: ${question}` : question;
         }
 
         let image = null;
@@ -465,6 +497,7 @@ export function createMessageService(dependencies) {
           if (!question) {
             question = 'Jelaskan gambar ini secara rinci.';
           }
+          pendingUserTurn.content = isGroup ? `${senderName}: ${question}` : question;
         }
 
         if (!image && dependencies.image.isGenerationRequest(question)) {
@@ -659,6 +692,7 @@ export function createMessageService(dependencies) {
         emitStage('message_processing', 'failed', error);
       }
       if (outboundAttempted) return;
+      await persistPendingUserTurn();
       const fallbackMessage = dependencies.assistant.getFailureMessage(error);
 
       try {

@@ -330,6 +330,130 @@ test('database, application lifecycle, and message service share only injected t
   });
 });
 
+test('preserves an inbound turn after uncertain reply so the next request loads it without false assistant history', { skip: skipSQLiteTests }, async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const database = sqliteModule.createDatabase({
+      dbPath: join(directory, 'uncertain-conversation.sqlite'),
+    });
+    const { buildConversationContents } = await import('../src/ai/conversation-context.js');
+    const observedRequests = [];
+    let answerNumber = 0;
+    const service = createMessageService({
+      botName: 'Friday',
+      getReadyAt: () => 1,
+      sessions: {
+        privateSessionId: (senderId) => `private:${senderId}`,
+        groupSessionId: (chatId) => `group:${chatId}`,
+      },
+      memory: { parseCommand: () => null, handleCommand: async () => null },
+      video: {
+        getUrls: () => [], isDownloadRequest: () => false,
+        download: async () => null, getFailureMessage: () => '',
+      },
+      sticker: {
+        isRequest: () => false, parseOptions: () => ({}),
+        create: async () => null, getFailureMessage: () => '',
+      },
+      image: {
+        isGenerationRequest: () => false, generate: async () => null,
+        isQuotaError: () => false, getQuotaDiagnostic: () => '',
+        getFailureMessage: () => '',
+      },
+      assistant: {
+        ask: async ({ privateSession, question }) => {
+          observedRequests.push({
+            question,
+            history: database.loadHistory(privateSession, 10),
+          });
+          answerNumber += 1;
+          return `answer-${answerNumber}`;
+        },
+        getFailureMessage: () => 'safe failure',
+      },
+      audio: {
+        transcribe: async () => '', generate: async () => null,
+        isQuotaError: () => false, getFailureMessage: (_error, text) => text,
+      },
+      history: {
+        save: (...args) => database.saveMessage(...args),
+        saveConversationTurn: (...args) => database.saveConversationTurn(...args),
+      },
+      formatMessage: (text) => text,
+      deliver: {
+        sendVideo: async () => null, sendSticker: async () => null,
+        sendImage: async () => null, sendVoice: async () => null,
+      },
+      logger: { event() {}, error() {} },
+    });
+    const makeMessage = (messageId, text, timestamp) => ({
+      messageId,
+      chatId: 'owner@c.us',
+      senderId: 'owner@c.us',
+      chatType: 'private',
+      messageType: 'chat',
+      text,
+      caption: '',
+      timestamp,
+      group: null,
+      media: null,
+    });
+
+    try {
+      await service.handle(makeMessage('first', 'Perkenalkan dirimu.', 2), {
+        reply: async () => undefined,
+      });
+      assert.deepEqual(database.loadHistory('private:owner@c.us'), [
+        { role: 'user', parts: [{ text: 'Perkenalkan dirimu.' }] },
+      ]);
+
+      await service.handle(makeMessage('second', 'Apa yang baru saja aku minta?', 3), {
+        reply: async () => ({ id: 'locally-submitted' }),
+      });
+
+      assert.deepEqual(observedRequests[1].history, [
+        { role: 'user', parts: [{ text: 'Perkenalkan dirimu.' }] },
+      ]);
+      const prompt = buildConversationContents({
+        question: observedRequests[1].question,
+        history: observedRequests[1].history,
+        systemInstruction: 'test',
+      });
+      assert.deepEqual(prompt.contents, [
+        { role: 'user', parts: [
+          { text: 'Perkenalkan dirimu.' },
+          { text: 'Apa yang baru saja aku minta?' },
+        ] },
+      ]);
+      assert.equal(prompt.contents.at(-1).parts[1].text, 'Apa yang baru saja aku minta?');
+      assert.deepEqual(database.loadHistory('private:owner@c.us'), [
+        { role: 'user', parts: [{ text: 'Perkenalkan dirimu.' }] },
+        { role: 'user', parts: [{ text: 'Apa yang baru saja aku minta?' }] },
+        { role: 'model', parts: [{ text: 'answer-2' }] },
+      ]);
+      assert.deepEqual(database.loadHistory('group:owner@c.us'), []);
+
+      await service.handle(makeMessage('third', 'Lanjutkan dari pertanyaan tadi.', 4), {
+        reply: async () => ({ id: 'third-local-submission' }),
+      });
+      const thirdPrompt = buildConversationContents({
+        question: observedRequests[2].question,
+        history: observedRequests[2].history,
+        systemInstruction: 'test',
+      });
+      assert.deepEqual(thirdPrompt.contents.map(({ role }) => role), [
+        'user', 'model', 'user',
+      ]);
+      assert.deepEqual(thirdPrompt.contents[0].parts.map(({ text }) => text), [
+        'Perkenalkan dirimu.', 'Apa yang baru saja aku minta?',
+      ]);
+      assert.equal(thirdPrompt.contents.at(-1).parts[0].text,
+        'Lanjutkan dari pertanyaan tadi.');
+    } finally {
+      database.close();
+    }
+  });
+});
+
 test('application startup failure closes the injected temporary database', { skip: skipSQLiteTests }, async () => {
   await withTemporaryDirectory(async (directory) => {
     const dbPath = join(directory, 'startup-failure.sqlite');

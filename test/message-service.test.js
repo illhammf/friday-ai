@@ -182,7 +182,7 @@ test('emits correlated safe stage fields without logging message or answer conte
   assert.equal(serializedStages.includes('Jawaban AI'), false);
 });
 
-test('records an uncertain null reply result and neither persists nor sends a fallback', async () => {
+test('records an uncertain null reply result and persists only the received user message', async () => {
   const stages = [];
   const { calls, service } = createHarness({
     logger: { stage: (stage, fields) => stages.push({ stage, ...fields }) },
@@ -191,7 +191,9 @@ test('records an uncertain null reply result and neither persists nor sends a fa
     reply: async () => null,
   });
 
-  assert.equal(calls.some(([type]) => type === 'save'), false);
+  assert.deepEqual(calls.filter(([type]) => type === 'save'), [
+    ['save', 'private:user-1@c.us', 'user', 'Halo Friday'],
+  ]);
   assert.equal(calls.some(([type]) => type === 'reply'), false);
   assert.ok(stages.some(({ stage, outcome, category }) =>
     stage === 'reply_submission' && outcome === 'uncertain' && category === 'transport_uncertain'));
@@ -331,7 +333,19 @@ test('does not send a fallback after an uncertain final WhatsApp reply failure',
   assert.equal(calls.some(([type]) => type === 'ask'), true);
   assert.ok(stages.some(({ stage, outcome, category }) =>
     stage === 'reply_submission' && outcome === 'uncertain' && category === 'transport_uncertain'));
-  assert.equal(calls.some(([type]) => type === 'save'), false);
+  assert.deepEqual(calls.filter(([type]) => type === 'save'), [
+    ['save', 'private:user-1@c.us', 'user', 'Halo Friday'],
+  ]);
+});
+
+test('persists a received user message once when WhatsApp reply resolves undefined', async () => {
+  const { calls, service } = createHarness();
+  await service.handle(createMessage(), { reply: async () => undefined });
+
+  assert.deepEqual(calls.filter(([type]) => type === 'save'), [
+    ['save', 'private:user-1@c.us', 'user', 'Halo Friday'],
+  ]);
+  assert.equal(calls.some(([type, , role]) => type === 'save' && role === 'model'), false);
 });
 
 test('does not send a text fallback after uncertain video delivery', async () => {
@@ -352,7 +366,9 @@ test('does not send a text fallback after uncertain video delivery', async () =>
 
   assert.equal(calls.some(([type]) => type === 'sendVideo'), true);
   assert.equal(calls.some(([type]) => type === 'reply'), false);
-  assert.equal(calls.some(([type]) => type === 'save'), false);
+  assert.deepEqual(calls.filter(([type]) => type === 'save'), [
+    ['save', 'private:user-1@c.us', 'user', 'unduh video'],
+  ]);
 });
 
 test('does not send a fallback after uncertain sticker delivery', async () => {
@@ -374,7 +390,9 @@ test('does not send a fallback after uncertain sticker delivery', async () => {
 
   assert.equal(calls.some(([type]) => type === 'sendSticker'), true);
   assert.equal(calls.some(([type]) => type === 'reply'), false);
-  assert.equal(calls.some(([type]) => type === 'save'), false);
+  assert.deepEqual(calls.filter(([type]) => type === 'save'), [
+    ['save', 'private:user-1@c.us', 'user', 'stiker'],
+  ]);
 });
 
 test('does not resend an uncertain Voice Note answer as text', async () => {
@@ -396,10 +414,12 @@ test('does not resend an uncertain Voice Note answer as text', async () => {
 
   assert.equal(calls.some(([type]) => type === 'sendVoice'), true);
   assert.equal(calls.some(([type]) => type === 'reply'), false);
-  assert.equal(calls.some(([type]) => type === 'save'), false);
+  assert.deepEqual(calls.filter(([type]) => type === 'save'), [
+    ['save', 'private:user-1@c.us', 'user', 'hasil transkripsi'],
+  ]);
 });
 
-test('does not persist a turn when WhatsApp resolves without a sent-message result', async () => {
+test('persists inbound text but not assistant text when WhatsApp resolves without a sent-message result', async () => {
   const stages = [];
   const { calls, service } = createHarness({
     logger: { stage: (stage, fields) => stages.push({ stage, ...fields }) },
@@ -412,7 +432,9 @@ test('does not persist a turn when WhatsApp resolves without a sent-message resu
   };
   await service.handle(createMessage(), transport);
   assert.equal(calls.filter(([type]) => type === 'reply').length, 1);
-  assert.equal(calls.some(([type]) => type === 'save'), false);
+  assert.deepEqual(calls.filter(([type]) => type === 'save'), [
+    ['save', 'private:user-1@c.us', 'user', 'Halo Friday'],
+  ]);
   assert.ok(stages.some(({ stage, outcome, category }) =>
     stage === 'reply_submission' && outcome === 'uncertain' && category === 'transport_uncertain'));
 });
@@ -504,7 +526,7 @@ test('keeps a group request from blocking the same sender private conversation',
   assert.ok(calls.some(([type, text]) => type === 'reply' && text === 'Jawaban grup'));
 });
 
-test('rejects an oversized formatted assistant reply without persisting the turn', async () => {
+test('rejects an oversized formatted assistant reply while preserving only the received input', async () => {
   const { calls, service } = createHarness({
     assistant: { ask: async () => 'x'.repeat(32 * 1024) },
     formatMessage: () => 'x'.repeat(32 * 1024 + 1),
@@ -513,7 +535,9 @@ test('rejects an oversized formatted assistant reply without persisting the turn
   assert.deepEqual(calls.filter(([type]) => type === 'reply'), [
     ['reply', 'AI sedang bermasalah.'],
   ]);
-  assert.equal(calls.some(([type]) => type === 'save'), false);
+  assert.deepEqual(calls.filter(([type]) => type === 'save'), [
+    ['save', 'private:user-1@c.us', 'user', 'Halo Friday'],
+  ]);
 });
 
 test('keeps memory commands private and scopes them to the sender private session', async () => {
@@ -657,7 +681,7 @@ test('saves generated-image history only after sending the image', async () => {
   assert.equal(calls.some(([type]) => type === 'ask'), false);
 });
 
-test('does not persist a generated-image turn when WhatsApp returns no message result', async () => {
+test('preserves only the generated-image request when WhatsApp returns no message result', async () => {
   const stages = [];
   const { calls, service } = createHarness({
     deliver: { sendImage: async () => undefined },
@@ -665,7 +689,9 @@ test('does not persist a generated-image turn when WhatsApp returns no message r
   });
   await service.handle(createMessage({ text: 'Buat gambar seekor kucing' }), createMessenger(calls));
   assert.equal(calls.some(([type]) => type === 'sendImage'), false);
-  assert.equal(calls.some(([type]) => type === 'save'), false);
+  assert.deepEqual(calls.filter(([type]) => type === 'save'), [
+    ['save', 'private:user-1@c.us', 'user', 'Buat gambar seekor kucing'],
+  ]);
   assert.ok(stages.some(({ stage, outcome, category }) =>
     stage === 'image_submission' && outcome === 'uncertain' && category === 'transport_uncertain'));
 });
@@ -685,6 +711,9 @@ test('uses the safe AI failure response when processing fails', async () => {
 
   assert.ok(stages.some(({ stage, outcome, category }) =>
     stage === 'ai_request' && outcome === 'failed' && category === 'provider_error'));
+  assert.deepEqual(calls.filter(([type]) => type === 'save'), [
+    ['save', 'private:user-1@c.us', 'user', 'Halo Friday'],
+  ]);
   assert.deepEqual(calls.filter(([type]) => type === 'reply').at(-1), [
     'reply',
     'AI sedang bermasalah.',

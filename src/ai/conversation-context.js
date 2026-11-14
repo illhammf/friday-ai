@@ -97,17 +97,29 @@ export function buildConversationContents({
     senderName,
   });
   const { modelInput } = request;
-  const historyContents = modelInput.history.map(({ role, parts }) => ({
-    role: role === 'assistant' ? 'model' : 'user',
-    parts: parts.map(toGeminiPart),
-  }));
+  const historyContents = [];
+  for (const { role, parts } of modelInput.history) {
+    const geminiRole = role === 'assistant' ? 'model' : 'user';
+    const geminiParts = parts.map(toGeminiPart);
+    const previous = historyContents.at(-1);
+    if (previous?.role === geminiRole) {
+      previous.parts.push(...geminiParts);
+    } else {
+      historyContents.push({ role: geminiRole, parts: geminiParts });
+    }
+  }
   const currentContent = {
     role: 'user',
     parts: modelInput.currentMessage.parts.map(toGeminiPart),
   };
+  if (historyContents.at(-1)?.role === 'user') {
+    historyContents.at(-1).parts.push(...currentContent.parts);
+  } else {
+    historyContents.push(currentContent);
+  }
 
   return Object.freeze({
-    contents: Object.freeze([...historyContents, currentContent]),
+    contents: Object.freeze(historyContents),
     history: normalized.history,
     currentUserText: modelInput.currentMessage.parts[0].text,
     removedEmptyEntries: normalized.removedEmptyEntries,

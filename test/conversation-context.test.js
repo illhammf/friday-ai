@@ -15,7 +15,7 @@ const base = {
   question: 'Current question.',
 };
 
-test('preserves database history order and duplicate user messages', () => {
+test('preserves history order and duplicate user text while merging adjacent Gemini roles', () => {
   const result = buildConversationContents({
     ...base,
     history: [
@@ -26,13 +26,15 @@ test('preserves database history order and duplicate user messages', () => {
   });
 
   assert.deepEqual(result.contents.map(({ role }) => role), [
-    'user', 'model', 'user', 'user',
+    'user', 'model', 'user',
   ]);
   assert.deepEqual(
-    result.contents.slice(0, 3).map(({ parts }) => parts[0].text),
-    ['Repeat.', 'First reply.', 'Repeat.'],
+    result.contents.slice(0, 2).map(({ parts }) => parts[0].text),
+    ['Repeat.', 'First reply.'],
   );
-  assert.equal(result.contents.at(-1).parts[0].text, 'Current question.');
+  assert.deepEqual(result.contents.at(-1).parts.map(({ text }) => text), [
+    'Repeat.', 'Current question.',
+  ]);
 });
 
 test('drops only empty history entries and reports how many were removed', () => {
