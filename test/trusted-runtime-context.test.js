@@ -35,6 +35,7 @@ function createDependencies({
     allowedTools: ['lookup_data'],
     knownCapabilities: ['lookup'],
     getPrivateSessionId,
+    getTrustedPrincipalId: () => 'fixture-principal',
     isValidSenderId,
   });
   const projector = createTrustedRuntimeContextProjector({
@@ -79,6 +80,8 @@ test('authorizes a valid private adapter identity using the canonical private se
     conversationType: 'private',
     authorizedTools: ['lookup_data'],
     grantedCapabilities: ['lookup'],
+    principalId: 'fixture-principal',
+    grantScope: PRIVATE_SESSION,
   });
 });
 
@@ -225,6 +228,7 @@ test('rejects invalid trusted capability configuration at construction', () => {
   const authorizationPolicy = createToolAuthorizationPolicy({
     registry,
     getPrivateSessionId: (senderId) => `private:${senderId}`,
+    getTrustedPrincipalId: () => 'fixture-principal',
     isValidSenderId: () => true,
   });
 

@@ -2,7 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createToolAssistant, ToolAssistantError } from '../src/application/tool-assistant.js';
 import { createToolRegistry } from '../src/ai/tools/tool-registry.js';
-import { createToolExecutor } from '../src/ai/tools/tool-executor.js';
+import { createToolExecutor as createToolExecutorFactory } from '../src/ai/tools/tool-executor.js';
+import { createTestGrantLifecycle } from './helpers/tool-grant-fixture.js';
+
+function createToolExecutor(options) {
+  return createToolExecutorFactory({
+    grantLifecycle: createTestGrantLifecycle(),
+    ...options,
+  });
+}
 
 const emptyObjectSchema = {
   type: 'object',
@@ -44,6 +52,8 @@ function privateContext(overrides = {}) {
     sessionId: 'private:trusted-sender',
     authorizedTools: ['lookup_data'],
     grantedCapabilities: ['lookup'],
+    principalId: 'fixture-principal',
+    grantScope: 'fixture-scope',
     ...overrides,
   };
 }

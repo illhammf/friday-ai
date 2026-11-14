@@ -121,7 +121,6 @@ export function createTrustedRuntimeContextProjector({
       'An application-owned sender identity validator is required.',
     );
   }
-
   const capabilities = normalizeCapabilities(applicationCapabilities);
 
   return Object.freeze({

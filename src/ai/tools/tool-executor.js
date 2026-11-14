@@ -101,6 +101,7 @@ function serializeOutput(output, maxOutputBytes) {
 
 export function createToolExecutor({
   registry,
+  grantLifecycle,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   maxArgumentBytes = DEFAULT_MAX_ARGUMENT_BYTES,
   maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
@@ -109,6 +110,9 @@ export function createToolExecutor({
 } = {}) {
   if (!registry || typeof registry.get !== 'function') {
     throw new TypeError('A tool registry is required.');
+  }
+  if (!grantLifecycle || typeof grantLifecycle.authorize !== 'function') {
+    throw new TypeError('A tool grant lifecycle evaluator is required.');
   }
   for (const [name, value] of Object.entries({
     timeoutMs,
@@ -130,7 +134,35 @@ export function createToolExecutor({
     throw new TypeError('Timer dependencies must be functions.');
   }
 
+  async function isSnapshotAuthorized(tool, safeContext) {
+    try {
+      assertToolPermission(tool, safeContext);
+      const decision = await grantLifecycle.authorize({
+        principalId: safeContext.principalId,
+        scope: safeContext.grantScope,
+        requiredCapabilities: tool.requiredCapabilities,
+      });
+      return decision?.authorized === true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function isAuthorized(name, trustedContext = {}) {
+    const tool = registry.get(name);
+    if (!tool) return false;
+    try {
+      return await isSnapshotAuthorized(
+        tool,
+        snapshotTrustedContext(trustedContext),
+      );
+    } catch {
+      return false;
+    }
+  }
+
   return Object.freeze({
+    isAuthorized,
     isBoundTo(candidateRegistry) {
       return candidateRegistry === registry;
     },
@@ -167,18 +199,14 @@ export function createToolExecutor({
           'Tool permission denied.',
         );
       }
-      try {
-        assertToolPermission(tool, safeContext);
-      } catch {
-        throw new ToolExecutionError(
-          'TOOL_PERMISSION_DENIED',
-          'Tool permission denied.',
-        );
-      }
-
       const handlerContext = Object.create(null);
       for (const [key, value] of Object.entries(safeContext)) {
-        if (key === 'authorizedTools' || key === 'grantedCapabilities') continue;
+        if (
+          key === 'authorizedTools' ||
+          key === 'grantedCapabilities' ||
+          key === 'principalId' ||
+          key === 'grantScope'
+        ) continue;
         Object.defineProperty(handlerContext, key, {
           value,
           enumerable: true,
@@ -201,12 +229,24 @@ export function createToolExecutor({
       }
 
       const safeArguments = freezeArguments(validation.value);
+      if (!await isSnapshotAuthorized(tool, safeContext)) {
+        throw new ToolExecutionError(
+          'TOOL_PERMISSION_DENIED',
+          'Tool permission denied.',
+        );
+      }
+
       let timeout;
       let timedOut = false;
       onStarted?.();
-      const handlerPromise = Promise.resolve().then(
-        () => tool.handler(safeArguments, handlerContext),
-      );
+      let handlerPromise;
+      try {
+        handlerPromise = Promise.resolve(
+          tool.handler(safeArguments, handlerContext),
+        );
+      } catch (error) {
+        handlerPromise = Promise.reject(error);
+      }
       handlerPromise.catch(() => {});
 
       const timeoutPromise = new Promise((_, reject) => {

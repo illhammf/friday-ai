@@ -5,7 +5,15 @@ import {
   ToolAuthorizationPolicyError,
 } from '../src/application/tool-authorization-policy.js';
 import { createToolRegistry } from '../src/ai/tools/tool-registry.js';
-import { createToolExecutor } from '../src/ai/tools/tool-executor.js';
+import { createToolExecutor as createToolExecutorFactory } from '../src/ai/tools/tool-executor.js';
+import { createTestGrantLifecycle } from './helpers/tool-grant-fixture.js';
+
+function createToolExecutor(options) {
+  return createToolExecutorFactory({
+    grantLifecycle: createTestGrantLifecycle(),
+    ...options,
+  });
+}
 
 const EMPTY_SCHEMA = {
   type: 'object',
@@ -36,6 +44,7 @@ function createPolicy({
   allowedTools = ['lookup_data'],
   knownCapabilities = ['lookup'],
   getPrivateSessionId = (senderId) => `private:${senderId}`,
+  getTrustedPrincipalId = () => 'fixture-principal',
   isValidSenderId = (senderId) =>
     /^[a-z0-9._+-]+@(?:c\.us|lid|s\.whatsapp\.net)$/i.test(senderId),
 } = {}) {
@@ -46,6 +55,7 @@ function createPolicy({
       allowedTools,
       knownCapabilities,
       getPrivateSessionId,
+      getTrustedPrincipalId,
       isValidSenderId,
     }),
   };
@@ -72,6 +82,8 @@ test('grants an explicitly approved private capability with trusted identity and
     conversationType: 'private',
     authorizedTools: ['lookup_data'],
     grantedCapabilities: ['lookup'],
+    principalId: 'fixture-principal',
+    grantScope: 'private:user@c.us',
   });
   assert.deepEqual(decision.identity, { senderId: 'user@c.us' });
   assert.deepEqual(decision.sessionScope, {
@@ -202,6 +214,13 @@ test('model-like input cannot inject tool grants or identity fields', () => {
   });
   assert.equal(decision.authorized, false);
   assert.equal(decision.reason, 'invalid_runtime_context');
+
+  const principalInjection = policy.authorize({
+    ...privateRuntimeContext(),
+    principalId: 'attacker-chosen-principal',
+  });
+  assert.equal(principalInjection.authorized, false);
+  assert.equal(principalInjection.reason, 'invalid_runtime_context');
 
   const modelInput = {
     senderId: 'attacker@c.us',
@@ -339,6 +358,8 @@ test('keeps sender and session identifiers out of handler context', async () => 
   assert.equal('senderId' in handlerContext, false);
   assert.equal('privateSessionId' in handlerContext, false);
   assert.equal('conversationSessionId' in handlerContext, false);
+  assert.equal('principalId' in handlerContext, false);
+  assert.equal('grantScope' in handlerContext, false);
   assert.equal('authorizedTools' in handlerContext, false);
   assert.equal('grantedCapabilities' in handlerContext, false);
   assert.equal(handlerContext.signal instanceof AbortSignal, true);
@@ -391,6 +412,7 @@ test('default empty allowlist grants no registered tools', () => {
     knownCapabilities: ['lookup'],
     knownCapabilities: ['lookup'],
     getPrivateSessionId: (senderId) => `private:${senderId}`,
+    getTrustedPrincipalId: () => 'fixture-principal',
     isValidSenderId: (senderId) => senderId === 'user@c.us',
   });
   const decision = policy.authorize(privateRuntimeContext());
@@ -416,6 +438,7 @@ test('refuses to configure grants for action-category tools', () => {
     allowedTools: ['perform_action'],
     knownCapabilities: ['action'],
     getPrivateSessionId: (senderId) => `private:${senderId}`,
+    getTrustedPrincipalId: () => 'fixture-principal',
     isValidSenderId: () => true,
   }), /not registered as read_only/);
 });

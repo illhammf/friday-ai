@@ -352,7 +352,7 @@ function normalizeToolError(error) {
   return { code, message: ERROR_DETAILS[code] };
 }
 
-function getAuthorizedDeclarationNames(trustedContext, registry) {
+async function getAuthorizedDeclarationNames(trustedContext, registry, executor) {
   const grants = trustedContext?.authorizedTools;
   const capabilities = trustedContext?.grantedCapabilities;
   if (
@@ -379,7 +379,13 @@ function getAuthorizedDeclarationNames(trustedContext, registry) {
     }
     names.add(name);
   }
-  return names;
+  const currentlyAuthorized = new Set();
+  for (const name of names) {
+    if (await executor.isAuthorized(name, trustedContext)) {
+      currentlyAuthorized.add(name);
+    }
+  }
+  return currentlyAuthorized;
 }
 
 export function createToolOrchestrator({
@@ -395,7 +401,11 @@ export function createToolOrchestrator({
   if (typeof generator !== 'function') {
     throw new TypeError('A generator function is required.');
   }
-  if (!executor || typeof executor.execute !== 'function') {
+  if (
+    !executor ||
+    typeof executor.execute !== 'function' ||
+    typeof executor.isAuthorized !== 'function'
+  ) {
     throw new TypeError('A tool executor is required.');
   }
   if (
@@ -438,9 +448,10 @@ export function createToolOrchestrator({
       const knownCallIds = new Set();
       const functionResponses = [];
       const progress = [];
-      const authorizedDeclarationNames = getAuthorizedDeclarationNames(
+      const authorizedDeclarationNames = await getAuthorizedDeclarationNames(
         trustedContext,
         registry,
+        executor,
       );
       const declarationsForRequest = declarations.filter(({ name }) =>
         authorizedDeclarationNames.has(name));

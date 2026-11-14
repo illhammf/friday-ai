@@ -19,6 +19,7 @@ const DENIAL_REASONS = Object.freeze({
   private_session: 'missing_or_invalid_private_session',
   conversation_session: 'missing_or_invalid_conversation_session',
   scope_mismatch: 'conversation_session_scope_mismatch',
+  principal: 'missing_or_invalid_trusted_principal',
   capabilities: 'invalid_granted_capabilities',
   unknown_capability: 'unknown_application_capability',
   no_grants: 'no_explicit_tool_grants',
@@ -106,6 +107,7 @@ export function createToolAuthorizationPolicy({
   knownCapabilities = [],
   getPrivateSessionId,
   isValidSenderId,
+  getTrustedPrincipalId,
 } = {}) {
   if (
     !registry ||
@@ -126,6 +128,11 @@ export function createToolAuthorizationPolicy({
   if (typeof isValidSenderId !== 'function') {
     throw new ToolAuthorizationPolicyError(
       'An application-owned sender identity validator is required.',
+    );
+  }
+  if (typeof getTrustedPrincipalId !== 'function') {
+    throw new ToolAuthorizationPolicyError(
+      'An application-owned trusted-principal resolver is required.',
     );
   }
 
@@ -212,6 +219,19 @@ export function createToolAuthorizationPolicy({
       ) {
         return denial(DENIAL_REASONS.conversation_session);
       }
+      let principalId;
+      try {
+        principalId = getTrustedPrincipalId();
+      } catch {
+        return denial(DENIAL_REASONS.principal);
+      }
+      if (
+        typeof principalId !== 'string' ||
+        !principalId.trim() ||
+        principalId !== principalId.trim()
+      ) {
+        return denial(DENIAL_REASONS.principal);
+      }
 
       let expectedPrivateSessionId;
       try {
@@ -259,6 +279,8 @@ export function createToolAuthorizationPolicy({
         conversationType: 'private',
         authorizedTools,
         grantedCapabilities,
+        principalId,
+        grantScope: input.privateSessionId,
       });
 
       return Object.freeze({

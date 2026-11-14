@@ -13,7 +13,15 @@ import {
 } from '../src/ai/tool-orchestrator.js';
 import { createToolAssistant } from '../src/application/tool-assistant.js';
 import { createToolRegistry } from '../src/ai/tools/tool-registry.js';
-import { createToolExecutor } from '../src/ai/tools/tool-executor.js';
+import { createToolExecutor as createToolExecutorFactory } from '../src/ai/tools/tool-executor.js';
+import { createTestGrantLifecycle } from './helpers/tool-grant-fixture.js';
+
+function createToolExecutor(options) {
+  return createToolExecutorFactory({
+    grantLifecycle: createTestGrantLifecycle(),
+    ...options,
+  });
+}
 
 const EMPTY_SCHEMA = {
   type: 'object',
@@ -109,6 +117,8 @@ const PRIVATE_CONTEXT = {
   senderId: 'test',
   authorizedTools: ['lookup_data'],
   grantedCapabilities: ['lookup'],
+  principalId: 'fixture-principal',
+  grantScope: 'fixture-scope',
 };
 const REQUEST = {
   question: 'Find the value.',

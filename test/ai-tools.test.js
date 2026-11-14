@@ -16,9 +16,17 @@ import {
   ToolPermissionError,
 } from '../src/ai/tools/tool-permission-policy.js';
 import {
-  createToolExecutor,
+  createToolExecutor as createToolExecutorFactory,
   ToolExecutionError,
 } from '../src/ai/tools/tool-executor.js';
+import { createTestGrantLifecycle } from './helpers/tool-grant-fixture.js';
+
+function createToolExecutor(options) {
+  return createToolExecutorFactory({
+    grantLifecycle: createTestGrantLifecycle(),
+    ...options,
+  });
+}
 
 const emptyObjectSchema = {
   type: 'object',
@@ -294,6 +302,8 @@ test('executor validates, authorizes, and executes only registered tools', async
     {
       authorizedTools: ['read_status'],
       grantedCapabilities: ['read_status'],
+      principalId: 'fixture-principal',
+      grantScope: 'fixture-scope',
       chatType: 'private',
       privateSessionId: 'private:user',
     },
@@ -313,6 +323,8 @@ test('executor validates, authorizes, and executes only registered tools', async
     executor.execute('read_status', { query: 'x'.repeat(21) }, {
       authorizedTools: ['read_status'],
       grantedCapabilities: ['read_status'],
+      principalId: 'fixture-principal',
+      grantScope: 'fixture-scope',
     }, { onStarted: () => { started += 1; } }),
     (error) => error.code === 'TOOL_ARGUMENTS_INVALID' &&
       error.executionStarted === false,
@@ -355,6 +367,8 @@ test('executor enforces every registered capability requirement at dispatch', as
     executor.execute('read_status', {}, {
       authorizedTools,
       grantedCapabilities: ['project_read'],
+      principalId: 'fixture-principal',
+      grantScope: 'fixture-scope',
     }),
     { code: 'TOOL_PERMISSION_DENIED' },
   );
@@ -363,6 +377,8 @@ test('executor enforces every registered capability requirement at dispatch', as
   assert.deepEqual(await executor.execute('read_status', {}, {
     authorizedTools,
     grantedCapabilities: ['project_read', 'private_context_read'],
+    principalId: 'fixture-principal',
+    grantScope: 'fixture-scope',
   }), { ok: true });
   assert.equal(executions, 1);
 });
@@ -398,6 +414,8 @@ test('executor normalizes handler errors without exposing stacks or secrets', as
     executor.execute('read_status', {}, {
       authorizedTools: ['read_status'],
       grantedCapabilities: ['read_status'],
+      principalId: 'fixture-principal',
+      grantScope: 'fixture-scope',
     }),
     (error) => error.code === 'TOOL_EXECUTION_FAILED' &&
       error.message === 'Tool execution failed.' &&
@@ -421,6 +439,8 @@ test('executor bounds tool output and rejects non-serializable results', async (
     executor.execute('read_status', {}, {
       authorizedTools: ['read_status'],
       grantedCapabilities: ['read_status'],
+      principalId: 'fixture-principal',
+      grantScope: 'fixture-scope',
     }),
     { code: 'TOOL_OUTPUT_TOO_LARGE' },
   );
@@ -428,6 +448,8 @@ test('executor bounds tool output and rejects non-serializable results', async (
     executor.execute('invalid_result', {}, {
       authorizedTools: ['invalid_result'],
       grantedCapabilities: ['read_status'],
+      principalId: 'fixture-principal',
+      grantScope: 'fixture-scope',
     }),
     { code: 'TOOL_OUTPUT_INVALID' },
   );
@@ -469,6 +491,8 @@ test('executor reports timeout without claiming to cancel a running handler', as
     executor.execute('read_status', {}, {
       authorizedTools: ['read_status'],
       grantedCapabilities: ['read_status'],
+      principalId: 'fixture-principal',
+      grantScope: 'fixture-scope',
     }),
     (error) => error instanceof ToolExecutionError &&
       error.code === 'TOOL_TIMEOUT' &&

@@ -10,7 +10,15 @@ import {
   ToolOrchestrationError,
 } from '../src/ai/tool-orchestrator.js';
 import { createToolRegistry } from '../src/ai/tools/tool-registry.js';
-import { createToolExecutor } from '../src/ai/tools/tool-executor.js';
+import { createToolExecutor as createToolExecutorFactory } from '../src/ai/tools/tool-executor.js';
+import { createTestGrantLifecycle } from './helpers/tool-grant-fixture.js';
+
+function createToolExecutor(options) {
+  return createToolExecutorFactory({
+    grantLifecycle: createTestGrantLifecycle(),
+    ...options,
+  });
+}
 
 const lookupSchema = {
   type: 'object',
@@ -146,6 +154,8 @@ test('composes DTO, Gemini adapter, orchestrator, executor, and history across m
   const result = await orchestrator.run(input, {
     authorizedTools: ['lookup_data'],
     grantedCapabilities: ['lookup'],
+    principalId: 'fixture-principal',
+    grantScope: 'fixture-scope',
   });
   assert.equal(result.text, 'All three values were found.');
   assert.deepEqual(result.executionProgress.calls.map(({ providerCallId }) =>
@@ -304,6 +314,8 @@ test('normalizes unknown tools, invalid arguments, and permission denial without
       grantedCapabilities: scenario.authorizedTools.length > 0
         ? ['lookup']
         : [],
+      principalId: 'fixture-principal',
+      grantScope: 'fixture-scope',
     });
     assert.equal(result.text, 'Handled.', scenario.name);
     assert.equal(result.functionResponses[0].error.code, scenario.expected);
@@ -340,6 +352,8 @@ test('retains a failed handler response but marks the request unsafe to replay',
   const result = await orchestrator.run(createRequest(), {
     authorizedTools: ['lookup_data'],
     grantedCapabilities: ['lookup'],
+    principalId: 'fixture-principal',
+    grantScope: 'fixture-scope',
   });
   assert.equal(result.functionResponses[0].error.code, 'TOOL_EXECUTION_FAILED');
   assert.equal(result.executionProgress.calls[0].state, 'failed');
@@ -374,6 +388,8 @@ test('timeout stops provider rounds and records an uncertain tool result', async
   await assert.rejects(orchestrator.run(createRequest(), {
     authorizedTools: ['lookup_data'],
     grantedCapabilities: ['lookup'],
+    principalId: 'fixture-principal',
+    grantScope: 'fixture-scope',
   }), (error) =>
     error.code === 'TOOL_OUTCOME_UNKNOWN' &&
     error.executionProgress.calls[0].state === 'unknown' &&
@@ -411,6 +427,8 @@ test('preserves successful tool results if provider generation fails afterward',
   await assert.rejects(orchestrator.run(createRequest(), {
     authorizedTools: ['lookup_data'],
     grantedCapabilities: ['lookup'],
+    principalId: 'fixture-principal',
+    grantScope: 'fixture-scope',
   }), (error) => {
     assert.equal(error.kind, 'provider');
     assert.equal(error.executionProgress.calls[0].state, 'succeeded');

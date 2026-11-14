@@ -7,7 +7,15 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createToolOrchestrator, ToolOrchestrationError } from '../src/ai/tool-orchestrator.js';
 import { createToolRegistry } from '../src/ai/tools/tool-registry.js';
-import { createToolExecutor } from '../src/ai/tools/tool-executor.js';
+import { createToolExecutor as createToolExecutorFactory } from '../src/ai/tools/tool-executor.js';
+import { createTestGrantLifecycle } from './helpers/tool-grant-fixture.js';
+
+function createToolExecutor(options) {
+  return createToolExecutorFactory({
+    grantLifecycle: createTestGrantLifecycle(),
+    ...options,
+  });
+}
 
 const emptyObjectSchema = {
   type: 'object',
@@ -17,6 +25,8 @@ const emptyObjectSchema = {
 const AUTHORIZED_CONTEXT = {
   authorizedTools: ['lookup_data'],
   grantedCapabilities: ['lookup'],
+  principalId: 'fixture-principal',
+  grantScope: 'fixture-scope',
 };
 
 function createRegistry({ name = 'lookup_data', handler = async () => ({ value: 'ok' }) } = {}) {
@@ -42,6 +52,9 @@ function createFakeExecutor(implementation = async () => ({ value: 'ok' })) {
     calls,
     executor: {
       isBoundTo() {
+        return true;
+      },
+      async isAuthorized() {
         return true;
       },
       async execute(...args) {
@@ -185,6 +198,8 @@ test('executor rechecks capabilities if the trusted grant changes after declarat
   const context = {
     authorizedTools: ['lookup_data'],
     grantedCapabilities: ['lookup'],
+    principalId: 'fixture-principal',
+    grantScope: 'fixture-scope',
   };
   let generation = 0;
   const orchestrator = createToolOrchestrator({
@@ -472,6 +487,9 @@ test('preserves successful tool results when a later provider generation fails',
       isBoundTo(candidateRegistry) {
         return executor.isBoundTo(candidateRegistry);
       },
+      isAuthorized(...args) {
+        return executor.isAuthorized(...args);
+      },
       async execute(...args) {
         executions += 1;
         return executor.execute(...args);
@@ -490,6 +508,8 @@ test('preserves successful tool results when a later provider generation fails',
   await assert.rejects(orchestrator.run('input', {
     authorizedTools: ['lookup_data'],
     grantedCapabilities: ['lookup'],
+    principalId: 'fixture-principal',
+    grantScope: 'fixture-scope',
   }), (error) => {
     assert.equal(error.code, 'GENERATOR_FAILED');
     assert.equal(error.kind, 'provider');
@@ -541,6 +561,8 @@ test('reports executor schema validation failure before dispatch as retry-safe',
   const result = await orchestrator.run('input', {
     authorizedTools: ['lookup_data'],
     grantedCapabilities: ['lookup'],
+    principalId: 'fixture-principal',
+    grantScope: 'fixture-scope',
   });
   assert.equal(result.executionProgress.calls[0].state, 'failed');
   assert.equal(result.executionProgress.calls[0].executionStarted, false);
@@ -574,6 +596,8 @@ test('records a started handler failure as failed and unsafe to replay', async (
   const result = await orchestrator.run('input', {
     authorizedTools: ['lookup_data'],
     grantedCapabilities: ['lookup'],
+    principalId: 'fixture-principal',
+    grantScope: 'fixture-scope',
   });
   assert.equal(result.executionProgress.calls[0].state, 'failed');
   assert.equal(result.executionProgress.calls[0].executionStarted, true);
@@ -599,6 +623,8 @@ test('marks timed-out execution unknown and does not ask the generator again', a
   await assert.rejects(orchestrator.run('input', {
     authorizedTools: ['lookup_data'],
     grantedCapabilities: ['lookup'],
+    principalId: 'fixture-principal',
+    grantScope: 'fixture-scope',
   }), (error) => {
     assert.equal(error.code, 'TOOL_OUTCOME_UNKNOWN');
     assert.equal(error.executionProgress.calls[0].state, 'unknown');
@@ -619,6 +645,9 @@ test('treats an unclassified post-dispatch executor failure as uncertain', async
     registry,
     executor: {
       isBoundTo() {
+        return true;
+      },
+      async isAuthorized() {
         return true;
       },
       async execute(_name, _args, _context, { onStarted }) {
@@ -671,6 +700,9 @@ test('keeps separate progress for multiple calls and identifies validated undisp
   let invocation = 0;
   const executor = {
     isBoundTo() {
+      return true;
+    },
+    async isAuthorized() {
       return true;
     },
     async execute(name, args, context, hooks) {
@@ -796,6 +828,9 @@ test('never invokes the executor for an unregistered tool', async () => {
       isBoundTo() {
         return true;
       },
+      async isAuthorized() {
+        return true;
+      },
       async execute() {
         executorCalls += 1;
         return {};
@@ -857,6 +892,9 @@ test('rejects mismatched registry bindings and caps aggregate function history w
       isBoundTo(candidateRegistry) {
         return matchingExecutor.isBoundTo(candidateRegistry);
       },
+      isAuthorized(...args) {
+        return matchingExecutor.isAuthorized(...args);
+      },
       async execute(...args) {
         executions += 1;
         return matchingExecutor.execute(...args);
@@ -870,6 +908,8 @@ test('rejects mismatched registry bindings and caps aggregate function history w
   await assert.rejects(orchestrator.run('input', {
     authorizedTools: ['lookup_data'],
     grantedCapabilities: ['lookup'],
+    principalId: 'fixture-principal',
+    grantScope: 'fixture-scope',
   }), (error) =>
     error.code === 'FUNCTION_RESPONSE_HISTORY_TOO_LARGE' &&
     error.functionResponses.length === 1 &&
