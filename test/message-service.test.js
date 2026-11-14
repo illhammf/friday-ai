@@ -334,6 +334,71 @@ test('does not send a fallback after an uncertain final WhatsApp reply failure',
   assert.equal(calls.some(([type]) => type === 'save'), false);
 });
 
+test('does not send a text fallback after uncertain video delivery', async () => {
+  const { calls, service } = createHarness({
+    video: {
+      getUrls: () => ['https://video.example/item'],
+      isDownloadRequest: () => true,
+    },
+    deliver: {
+      sendVideo: async () => {
+        calls.push(['sendVideo']);
+        throw new Error('video send outcome unknown');
+      },
+    },
+  });
+
+  await service.handle(createMessage({ text: 'unduh video' }), createMessenger(calls));
+
+  assert.equal(calls.some(([type]) => type === 'sendVideo'), true);
+  assert.equal(calls.some(([type]) => type === 'reply'), false);
+  assert.equal(calls.some(([type]) => type === 'save'), false);
+});
+
+test('does not send a fallback after uncertain sticker delivery', async () => {
+  const { calls, service } = createHarness({
+    deliver: {
+      sendSticker: async () => {
+        calls.push(['sendSticker']);
+        throw new Error('sticker send outcome unknown');
+      },
+    },
+  });
+  const message = createMessage({
+    messageType: 'image',
+    text: 'stiker',
+    media: { download: async () => ({ mimetype: 'image/jpeg', data: 'image' }) },
+  });
+
+  await service.handle(message, createMessenger(calls));
+
+  assert.equal(calls.some(([type]) => type === 'sendSticker'), true);
+  assert.equal(calls.some(([type]) => type === 'reply'), false);
+  assert.equal(calls.some(([type]) => type === 'save'), false);
+});
+
+test('does not resend an uncertain Voice Note answer as text', async () => {
+  const { calls, service } = createHarness({
+    deliver: {
+      sendVoice: async () => {
+        calls.push(['sendVoice']);
+        throw new Error('voice send outcome unknown');
+      },
+    },
+  });
+  const message = createMessage({
+    messageType: 'ptt',
+    text: '',
+    media: { download: async () => ({ mimetype: 'audio/ogg', data: 'voice' }) },
+  });
+
+  await service.handle(message, createMessenger(calls));
+
+  assert.equal(calls.some(([type]) => type === 'sendVoice'), true);
+  assert.equal(calls.some(([type]) => type === 'reply'), false);
+  assert.equal(calls.some(([type]) => type === 'save'), false);
+});
+
 test('does not persist a turn when WhatsApp resolves without a sent-message result', async () => {
   const stages = [];
   const { calls, service } = createHarness({
@@ -389,6 +454,54 @@ test('stores group turns only in the shared group conversation session', async (
   assert.deepEqual(modelSave.slice(1), [
     'group:group-1@g.us', 'model', 'Jawaban AI',
   ]);
+});
+
+test('keeps a group request from blocking the same sender private conversation', async () => {
+  let releaseGroupAnswer;
+  const groupAnswer = new Promise((resolve) => { releaseGroupAnswer = resolve; });
+  const aiCalls = [];
+  const stages = [];
+  const { calls, service } = createHarness({
+    logger: { stage: (stage, fields) => stages.push({ stage, ...fields }) },
+    assistant: {
+      ask: async (input) => {
+        aiCalls.push(input);
+        if (input.sharedGroupSession) await groupAnswer;
+        return input.sharedGroupSession ? 'Jawaban grup' : 'Jawaban pribadi';
+      },
+    },
+  });
+
+  const groupProcessing = service.handle(createMessage({
+    messageId: 'group-message',
+    correlationId: 'group-correlation',
+    chatId: 'group-1@g.us',
+    senderId: 'member-1@c.us',
+    chatType: 'group',
+    text: 'Friday, pertanyaan grup',
+    group: { senderName: 'Ari' },
+  }), createMessenger(calls));
+
+  // Let the first request acquire its session lock before starting the other.
+  await new Promise((resolve) => setImmediate(resolve));
+  await service.handle(createMessage({
+    messageId: 'private-message',
+    correlationId: 'private-correlation',
+    text: 'pertanyaan pribadi',
+  }), createMessenger(calls));
+
+  assert.equal(aiCalls.length, 2);
+  assert.equal(aiCalls[0].sharedGroupSession, 'group:group-1@g.us');
+  assert.equal(aiCalls[1].sharedGroupSession, null);
+  assert.ok(stages.filter(({ correlationId }) => correlationId === 'group-correlation').length > 0);
+  assert.ok(stages.filter(({ correlationId }) => correlationId === 'private-correlation').length > 0);
+  assert.ok(stages.every(({ correlationId }) =>
+    correlationId === 'group-correlation' || correlationId === 'private-correlation'));
+  assert.ok(calls.some(([type, text]) => type === 'reply' && text === 'Jawaban pribadi'));
+
+  releaseGroupAnswer();
+  await groupProcessing;
+  assert.ok(calls.some(([type, text]) => type === 'reply' && text === 'Jawaban grup'));
 });
 
 test('rejects an oversized formatted assistant reply without persisting the turn', async () => {

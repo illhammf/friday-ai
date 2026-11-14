@@ -266,16 +266,18 @@ export function createMessageService(dependencies) {
         return;
       }
 
-      const sessionId = privateSession;
-
-      if (activeSessions.has(sessionId)) {
+      // Serialize by the conversation being processed. Group turns use the
+      // shared group session; locking them by the sender's private session
+      // incorrectly blocks that sender's independent private conversation.
+      const activeSessionId = sharedGroupSession || privateSession;
+      if (activeSessions.has(activeSessionId)) {
         await submitReply(
           'Sebentar ya, aku masih memproses pesan sebelumnya.',
         );
         return;
       }
 
-      activeSessions.add(sessionId);
+      activeSessions.add(activeSessionId);
 
       try {
         if (asksToDownloadVideo && socialVideoUrls.length === 1) {
@@ -299,9 +301,13 @@ export function createMessageService(dependencies) {
             );
           } catch (error) {
             if (videoStage === 'download') emitStage('video_download', 'failed', error);
-            await submitReply(
-              dependencies.video.getFailureMessage(error, videoStage),
-            );
+            // A failed send can still have reached WhatsApp. Only report a
+            // fallback when processing failed before outbound submission.
+            if (videoStage === 'download') {
+              await submitReply(
+                dependencies.video.getFailureMessage(error, videoStage),
+              );
+            }
           } finally {
             if (videoResult?.cleanup) {
               await videoResult.cleanup();
@@ -420,10 +426,10 @@ export function createMessageService(dependencies) {
             } catch (error) {
               if (!outboundAttempted) {
                 emitStage('sticker_processing', 'failed', error, { operation: 'sticker_creation' });
+                await submitReply(
+                  dependencies.sticker.getFailureMessage(error),
+                );
               }
-              await submitReply(
-                dependencies.sticker.getFailureMessage(error),
-              );
             } finally {
               if (stickerResult?.cleanup) {
                 await stickerResult.cleanup();
@@ -546,27 +552,28 @@ export function createMessageService(dependencies) {
           } catch (error) {
             if (!voiceSubmissionStarted) emitStage('voice_generation', 'failed', error);
 
+            // If the Voice Note submission itself failed, its remote outcome
+            // is uncertain. Do not send the same answer again as text.
+            if (!voiceSubmissionStarted) {
+              const fallbackText = dependencies.audio.getFailureMessage(
+                error,
+                answer,
+              );
 
-            const fallbackText = dependencies.audio.getFailureMessage(
-              error,
-              answer,
-            );
-
-            try {
-              const formattedFallback = dependencies.formatMessage(fallbackText);
-              const containsAssistantAnswer =
-                Buffer.byteLength(formattedFallback, 'utf8') <=
-                MAX_ASSISTANT_RESPONSE_BYTES;
-              const sentTextMessage = await submitReply(containsAssistantAnswer
-                ? formattedFallback
-                : 'Voice Note tidak tersedia dan jawaban terlalu panjang untuk dikirim. Coba minta rangkuman, ya.');
-              if (sentTextMessage == null) {
-                // The reply submission stage already records the uncertain result.
-              } else {
-                assistantResponseSubmitted = containsAssistantAnswer;
+              try {
+                const formattedFallback = dependencies.formatMessage(fallbackText);
+                const containsAssistantAnswer =
+                  Buffer.byteLength(formattedFallback, 'utf8') <=
+                  MAX_ASSISTANT_RESPONSE_BYTES;
+                const sentTextMessage = await submitReply(containsAssistantAnswer
+                  ? formattedFallback
+                  : 'Voice Note tidak tersedia dan jawaban terlalu panjang untuk dikirim. Coba minta rangkuman, ya.');
+                if (sentTextMessage != null) {
+                  assistantResponseSubmitted = containsAssistantAnswer;
+                }
+              } catch (replyError) {
+                // The reply submission stage records the uncertain result.
               }
-            } catch (replyError) {
-              // The reply submission stage records the uncertain transport result.
             }
           } finally {
             if (audioResult?.cleanup) {
@@ -627,7 +634,7 @@ export function createMessageService(dependencies) {
           );
         }
       } finally {
-        activeSessions.delete(sessionId);
+        activeSessions.delete(activeSessionId);
       }
     } catch (error) {
       if (!outboundAttempted && !failureStageLogged) {
