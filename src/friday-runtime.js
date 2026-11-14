@@ -56,6 +56,7 @@ import {
 } from './config/runtime-diagnostics.js';
 import { getAiFailureMessage } from './ai/ai-failure-message.js';
 import { createMessageService } from './application/message-service.js';
+import { createCommandRouter } from './application/command-router.js';
 import { createApplication } from './application/application-lifecycle.js';
 import {
   generateWithModelFallback,
@@ -63,12 +64,19 @@ import {
 } from './ai/model-fallback.js';
 import whatsapp from 'whatsapp-web.js';
 import qrcode from 'qrcode-terminal';
+import { createRequire } from 'node:module';
 import { inspect } from 'node:util';
+
+const packageMetadata = createRequire(import.meta.url)('../package.json');
 
 const { Client, LocalAuth, MessageMedia } = whatsapp;
 
 
 const BOT_NAME = process.env.BOT_NAME || 'Friday';
+const commandRouter = createCommandRouter({
+  botName: BOT_NAME,
+  version: packageMetadata.version,
+});
 const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 const MODELS = getModelChain(
   MODEL,
@@ -430,6 +438,7 @@ const messageService = createMessageService({
       },
     ),
   },
+  commands: commandRouter,
   video: {
     getUrls: getSocialVideoUrls,
     isDownloadRequest: isSocialVideoDownloadRequest,

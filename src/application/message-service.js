@@ -23,6 +23,7 @@
  * @property {() => number} getReadyAt
  * @property {{privateSessionId: (senderId: string) => string, groupSessionId: (chatId: string) => string}} sessions
  * @property {{parseCommand: Function, handleCommand: Function}} memory
+ * @property {{route: (text: string) => {handled: boolean, response?: string}}} [commands]
  * @property {{getUrls: Function, isDownloadRequest: Function, download: Function, getFailureMessage: Function}} video
  * @property {{isRequest: Function, parseOptions: Function, create: Function, getFailureMessage: Function}} sticker
  * @property {{isGenerationRequest: Function, generate: Function, isQuotaError: Function, getQuotaDiagnostic: Function, getFailureMessage: Function}} image
@@ -107,6 +108,30 @@ export function createMessageService(dependencies) {
           `Halo! Aku ${dependencies.botName}. Ada yang bisa kubantu?`,
         );
         return;
+      }
+
+      if (dependencies.commands?.route) {
+        let commandResult;
+        try {
+          commandResult = dependencies.commands.route(question);
+        } catch (error) {
+          dependencies.logger?.error('Router perintah gagal', error);
+          commandResult = {
+            handled: true,
+            response: 'Perintah belum bisa diproses sekarang. Coba lagi nanti ya.',
+          };
+        }
+
+        if (commandResult?.handled) {
+          try {
+            await transport.reply(commandResult.response);
+          } catch (error) {
+            // Sending may have succeeded remotely despite a transport rejection.
+            // Avoid a second reply after that uncertain side effect.
+            dependencies.logger?.error('Pengiriman balasan perintah gagal', error);
+          }
+          return;
+        }
       }
 
       const socialVideoUrls = dependencies.video.getUrls(question);
@@ -485,7 +510,14 @@ export function createMessageService(dependencies) {
             );
           }
         } else {
-          await transport.reply(dependencies.formatMessage(answer));
+          try {
+            await transport.reply(dependencies.formatMessage(answer));
+          } catch (error) {
+            // The remote send may have completed before the transport failed.
+            // Do not send a second fallback message with an uncertain outcome.
+            dependencies.logger?.error('Pengiriman balasan WhatsApp gagal', error);
+            return;
+          }
           dependencies.logger?.event(
             'success',
             'Jawaban teks berhasil dikirim',

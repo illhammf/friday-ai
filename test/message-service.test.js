@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createMessageService } from '../src/application/message-service.js';
+import { createCommandRouter } from '../src/application/command-router.js';
 import {
   parseMemoryCommand,
   handleMemoryCommand,
@@ -40,6 +41,7 @@ function createHarness(overrides = {}) {
         },
       }),
     },
+    commands: createCommandRouter({ version: '1.0.0' }),
     video: {
       getUrls: getSocialVideoUrls,
       isDownloadRequest: isSocialVideoDownloadRequest,
@@ -190,6 +192,98 @@ test('requires the bot prefix in groups and handles prefixed greetings', async (
   assert.equal(aiCall[1].question, 'bantu dong');
   assert.equal(aiCall[1].sharedGroupSession, 'group:group-1@g.us');
   assert.equal(aiCall[1].senderName, 'Ilham');
+});
+
+test('known commands bypass Gemini and conversation history', async () => {
+  const { calls, service } = createHarness();
+  await service.handle(createMessage({ text: '  /PING  ' }), createMessenger(calls));
+
+  assert.deepEqual(calls.filter(([type]) => type === 'reply'), [
+    ['reply', 'Pong! Friday siap menerima pesan.'],
+  ]);
+  assert.equal(calls.some(([type]) => type === 'ask'), false);
+  assert.equal(calls.some(([type]) => type === 'save'), false);
+});
+
+test('normal text continues to the existing assistant and unknown commands stay deterministic', async () => {
+  const { calls, service } = createHarness();
+  await service.handle(createMessage({ text: 'tolong /help ya' }), createMessenger(calls));
+  assert.equal(calls.some(([type]) => type === 'ask'), true);
+
+  calls.length = 0;
+  await service.handle(createMessage({ text: '/launch arbitrary text' }), createMessenger(calls));
+  assert.match(calls.find(([type]) => type === 'reply')[1], /belum tersedia/);
+  assert.equal(calls.some(([type]) => type === 'ask'), false);
+});
+
+test('group commands still require the existing bot prefix', async () => {
+  const { calls, service } = createHarness();
+  const group = {
+    chatId: 'group-1@g.us',
+    senderId: 'member-1@c.us',
+    chatType: 'group',
+    group: { senderName: 'Anggota grup' },
+  };
+
+  await service.handle(createMessage({ ...group, text: '/ping' }), createMessenger(calls));
+  assert.equal(calls.some(([type]) => type === 'reply'), false);
+
+  await service.handle(createMessage({ ...group, text: 'Friday: /ping' }), createMessenger(calls));
+  assert.deepEqual(calls.find(([type]) => type === 'reply'), [
+    'reply',
+    'Pong! Friday siap menerima pesan.',
+  ]);
+  assert.equal(calls.some(([type]) => type === 'ask'), false);
+  assert.equal(calls.some(([type]) => type === 'save'), false);
+});
+
+test('command router errors receive a safe response without invoking Gemini', async () => {
+  const { calls, service } = createHarness({
+    commands: { route: () => { throw new Error('private diagnostic'); } },
+  });
+  await service.handle(createMessage({ text: '/ping' }), createMessenger(calls));
+  assert.equal(calls.some(([type]) => type === 'ask'), false);
+  assert.match(calls.find(([type]) => type === 'reply')[1], /belum bisa diproses/);
+  assert.equal(calls.some(([, label, error]) => label === 'Router perintah gagal' && error.message === 'private diagnostic'), true);
+});
+
+test('failed command delivery is not retried with a second fallback message', async () => {
+  const { calls, service } = createHarness();
+  const transport = {
+    reply: async (text) => {
+      calls.push(['reply', text]);
+      throw new Error('delivery status unknown');
+    },
+  };
+  await service.handle(createMessage({ text: '/ping' }), transport);
+  assert.equal(calls.filter(([type]) => type === 'reply').length, 1);
+  assert.equal(calls.some(([type]) => type === 'ask'), false);
+});
+
+test('ignores whitespace-only and unsupported text messages without calling Gemini', async () => {
+  const { calls, service } = createHarness();
+  await service.handle(createMessage({ text: '   \n  ' }), createMessenger(calls));
+  await service.handle(createMessage({
+    messageId: 'unsupported',
+    messageType: 'sticker',
+    text: '',
+  }), createMessenger(calls));
+  assert.equal(calls.some(([type]) => type === 'ask'), false);
+  assert.equal(calls.some(([type]) => type === 'reply'), false);
+});
+
+test('does not send a fallback after an uncertain final WhatsApp reply failure', async () => {
+  const { calls, service } = createHarness();
+  const transport = {
+    reply: async (text) => {
+      calls.push(['reply', text]);
+      throw new Error('delivery acknowledgement lost');
+    },
+  };
+  await service.handle(createMessage(), transport);
+  assert.equal(calls.filter(([type]) => type === 'reply').length, 1);
+  assert.equal(calls.some(([type]) => type === 'ask'), true);
+  assert.equal(calls.some(([, label]) => label === 'Pengiriman balasan WhatsApp gagal'), true);
 });
 
 test('keeps memory commands private and scopes them to the sender private session', async () => {
