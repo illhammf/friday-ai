@@ -110,7 +110,7 @@ test('startup failure preserves its error and cleans up created resources', asyn
   assert.equal(application.state, 'stopped');
 });
 
-test('continues cleanup when admission stop, queue drain, and client destruction fail', async () => {
+test('keeps resources open if admission cannot be stopped safely', async () => {
   const { calls, exitCodes, loggedErrors, startupError, application } = createHarness({
     initializeClient: async () => {
       calls.push('initializeClient');
@@ -120,36 +120,19 @@ test('continues cleanup when admission stop, queue drain, and client destruction
       calls.push('stopAccepting');
       throw new Error('stop failed');
     },
-    drainMessages: async () => {
-      calls.push('drainMessages');
-      throw new Error('drain failed');
-    },
-    createClient: async () => {
-      calls.push('createClient');
-      return {
-        initialize: async () => {},
-        destroy: async () => {
-          calls.push('destroyClient');
-          throw new Error('destroy failed');
-        },
-      };
-    },
-    openDatabase: async () => {
-      calls.push('openDatabase');
-      return { close: async () => calls.push('closeDatabase') };
-    },
   });
 
   await assert.rejects(application.start(), (error) => error === startupError);
-  assert.deepEqual(calls.slice(4, 8), [
+  assert.deepEqual(calls, [
+    'openDatabase',
+    'createClient',
+    'configureClient',
+    'initializeClient',
     'stopAccepting',
-    'drainMessages',
-    'destroyClient',
-    'closeDatabase',
   ]);
-  assert.equal(loggedErrors.length, 3);
+  assert.equal(loggedErrors.length, 1);
   assert.deepEqual(exitCodes, [1]);
-  assert.equal(application.state, 'stopped');
+  assert.equal(application.state, 'failed');
 });
 
 test('graceful shutdown remains ordered and idempotent', async () => {
@@ -171,7 +154,7 @@ test('graceful shutdown remains ordered and idempotent', async () => {
   assert.equal(application.state, 'stopped');
 });
 
-test('shutdown requested during startup waits for initialization before cleanup', async () => {
+test('shutdown stops admission immediately and waits for startup before cleanup', async () => {
   let releaseInitialization;
   const initializationGate = new Promise((resolve) => {
     releaseInitialization = resolve;
@@ -197,11 +180,63 @@ test('shutdown requested during startup waits for initialization before cleanup'
     'createClient',
     'configureClient',
     'initializeClient',
-    'initializationFinished',
     'stopAccepting',
+    'initializationFinished',
     'drainMessages',
     'destroyClient',
     'closeDatabase',
   ]);
+  assert.equal(application.state, 'stopped');
+});
+
+test('keeps lifecycle in stopping state until a timed-out queue drain and cleanup finish', async () => {
+  let releaseDrain;
+  const drain = new Promise((resolve) => { releaseDrain = resolve; });
+  const { calls, application } = createHarness({
+    drainTimeoutMs: 5,
+    drainMessages: () => drain,
+  });
+  await application.start();
+
+  assert.equal(await application.shutdown('SIGTERM'), false);
+  assert.equal(application.state, 'stopping');
+  assert.equal(calls.includes('destroyClient'), false);
+  assert.equal(calls.includes('closeDatabase'), false);
+
+  releaseDrain();
+  for (let attempt = 0; attempt < 10 && application.state === 'stopping'; attempt += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.deepEqual(calls.slice(-2), ['destroyClient', 'closeDatabase']);
+  assert.equal(application.state, 'failed');
+});
+
+test('stops admission immediately and bounds shutdown while WhatsApp initialization is pending', async () => {
+  let releaseInitialization;
+  const initialization = new Promise((resolve) => { releaseInitialization = resolve; });
+  const { calls, application, exitCodes } = createHarness({
+    startupTimeoutMs: 5,
+    initializeClient: async () => {
+      calls.push('initializeClient');
+      await initialization;
+    },
+  });
+  const startup = application.start();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(await application.shutdown('SIGTERM'), false);
+  assert.equal(application.state, 'stopping');
+  assert.equal(calls.includes('stopAccepting'), true);
+  assert.equal(calls.includes('destroyClient'), false);
+  assert.equal(calls.includes('closeDatabase'), false);
+  assert.deepEqual(exitCodes, [1]);
+
+  releaseInitialization();
+  await assert.rejects(startup, /interrupted by shutdown/i);
+  for (let attempt = 0; attempt < 10 && application.state === 'stopping'; attempt += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(calls.includes('destroyClient'), true);
+  assert.equal(calls.includes('closeDatabase'), true);
   assert.equal(application.state, 'stopped');
 });

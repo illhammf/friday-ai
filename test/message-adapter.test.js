@@ -331,6 +331,7 @@ test('integrates event queue, deduplication, normalization, service, and reply a
   const queue = createMessageQueue();
   const deduplicator = createMessageDeduplicator();
   const calls = [];
+  const stages = [];
   const service = createService(calls);
   let accepted = true;
 
@@ -350,7 +351,11 @@ test('integrates event queue, deduplication, normalization, service, and reply a
       calls.push(['reply', text]);
       return message.reply(text);
     },
-    logger: { log: () => {}, error: (...args) => calls.push(['error', ...args]) },
+    logger: {
+      log: () => {},
+      error: (...args) => calls.push(['error', ...args]),
+      stage: (stage, fields) => stages.push({ stage, ...fields }),
+    },
   });
 
   const privateMessage = createRawMessage();
@@ -408,6 +413,64 @@ test('integrates event queue, deduplication, normalization, service, and reply a
     .filter((index) => index >= 0);
   assert.ok(replyIndexes[0] < persistIndexes[0]);
   assert.ok(replyIndexes[1] < persistIndexes[2]);
+  const acceptedStages = stages.filter(({ stage, outcome }) =>
+    stage === 'message_received' && outcome === 'accepted');
+  assert.equal(acceptedStages.length, 2);
+  const correlationIds = new Set(acceptedStages.map(({ correlationId }) => correlationId));
+  assert.equal(correlationIds.size, 2);
+  assert.ok(stages.some(({ stage, outcome, correlationId }) =>
+    stage === 'message_processing_started' && outcome === 'started' && correlationIds.has(correlationId)));
+  assert.equal(JSON.stringify(stages).includes('Hello Friday'), false);
+});
+
+test('logs correlated queue task failures without message identifiers', async () => {
+  const client = new EventEmitter();
+  const queue = createMessageQueue();
+  const stages = [];
+  registerQueuedMessageHandler(client, {
+    botName: 'Friday',
+    isQueueableMessage,
+    getDeduplicationKey: getMessageDeduplicationKey,
+    deduplicator: createMessageDeduplicator(),
+    queue,
+    normalize: () => ({ chatId: 'private-id', text: 'secret body' }),
+    handle: async () => { throw new Error('private diagnostic'); },
+    reply: () => async () => ({ id: 'outgoing' }),
+    logger: { stage: (stage, fields) => stages.push({ stage, ...fields }) },
+  });
+
+  client.emit('message', createRawMessage());
+  await queue.drain();
+
+  const accepted = stages.find(({ stage, outcome }) =>
+    stage === 'message_received' && outcome === 'accepted');
+  const failed = stages.find(({ stage }) => stage === 'queue_processing');
+  assert.ok(accepted);
+  assert.equal(failed.correlationId, accepted.correlationId);
+  assert.equal(failed.category, 'internal_error');
+  assert.equal(JSON.stringify(stages).includes('secret body'), false);
+  assert.equal(JSON.stringify(stages).includes('private-id'), false);
+});
+
+test('records queue-full notice transport uncertainty even when reply throws synchronously', async () => {
+  const client = new EventEmitter();
+  const stages = [];
+  registerQueuedMessageHandler(client, {
+    botName: 'Friday',
+    isQueueableMessage,
+    getDeduplicationKey: getMessageDeduplicationKey,
+    deduplicator: createMessageDeduplicator(),
+    queue: { enqueue: () => null },
+    normalize: () => null,
+    handle: async () => {},
+    reply: () => () => { throw new Error('transport uncertain'); },
+    logger: { stage: (stage, fields) => stages.push({ stage, ...fields }) },
+  });
+
+  client.emit('message', createRawMessage());
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(stages.some(({ stage, outcome, category }) =>
+    stage === 'queue_full_notice_submission' && outcome === 'uncertain' && category === 'transport_uncertain'));
 });
 
 test('integrates incoming image vision, sticker priority, and voice-note delivery', async () => {

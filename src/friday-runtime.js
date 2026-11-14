@@ -64,6 +64,8 @@ import {
 import { createMessageService } from './application/message-service.js';
 import { createCommandRouter } from './application/command-router.js';
 import { createApplication } from './application/application-lifecycle.js';
+import { classifyConversationError } from './application/conversation-observability.js';
+import { createRuntimeReadinessGate } from './application/runtime-readiness.js';
 import {
   generateWithModelFallback,
   getModelChain,
@@ -71,7 +73,6 @@ import {
 import whatsapp from 'whatsapp-web.js';
 import qrcode from 'qrcode-terminal';
 import { createRequire } from 'node:module';
-import { inspect } from 'node:util';
 
 const packageMetadata = createRequire(import.meta.url)('../package.json');
 
@@ -115,19 +116,21 @@ function isGeminiQuotaError(error) {
   );
 }
 
-async function generateWithRetry(model, contents, config) {
+async function generateWithRetry(model, contents, config, logStage) {
   const maxAttempts = 2;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      logEvent('ai', `Model ${model}`, `Percobaan ${attempt}/${maxAttempts}`);
-
-      return await ai.models.generateContent({
+      logStage?.('ai_provider_attempt', 'started');
+      const response = await ai.models.generateContent({
         model,
         contents,
         config,
       });
+      logStage?.('ai_provider_attempt', 'completed');
+      return response;
     } catch (error) {
+      logStage?.('ai_provider_attempt', 'failed', error);
       if (!isTemporaryGeminiError(error) || attempt === maxAttempts) {
         throw error;
       }
@@ -138,11 +141,7 @@ async function generateWithRetry(model, contents, config) {
 
       const delayMs = 1500 * attempt;
 
-      logEvent(
-        'warn',
-        'Layanan AI sedang sibuk',
-        `Mencoba ulang dalam ${delayMs / 1000} detik`
-      );
+      logStage?.('ai_retry_scheduled', 'continued', error);
 
       await sleep(delayMs);
     }
@@ -241,6 +240,17 @@ function logDivider() {
   );
 }
 
+function safeConversationLogMetadata(fields) {
+  const numeric = Object.fromEntries(
+    ['durationMs', 'inputTokens', 'outputTokens', 'totalTokens']
+      .filter((key) => Number.isFinite(fields[key]))
+      .map((key) => [key, fields[key]]),
+  );
+  return typeof fields.operation === 'string'
+    ? { ...numeric, operation: fields.operation.slice(0, 80) }
+    : numeric;
+}
+
   // Fungsi utama untuk mengajukan pertanyaan ke FRIDAY dan mendapatkan jawaban.
   async function askFriday({
     question,
@@ -248,6 +258,7 @@ function logDivider() {
     sharedGroupSession = null,
     senderName = 'Pengguna',
     image,
+    logStage,
   }, database, memoryService) {
     // Tentukan jenis percakapan.
     const isGroup = Boolean(sharedGroupSession);
@@ -304,38 +315,25 @@ function logDivider() {
 
     let response;
 
+    logStage?.('ai_provider_request', 'started');
     response = await generateWithModelFallback(
       MODELS,
-      (model) => generateWithRetry(model, contents, config),
+      (model) => generateWithRetry(model, contents, config, logStage),
       {
-        onFallback: ({ model, nextModel, error }) => {
-          console.warn(
-            `[Gemini] Model ${model} gagal (${error?.status || error?.code || 'sementara'}). Beralih ke ${nextModel}.`,
-          );
+        onFallback: ({ error }) => {
+          logStage?.('ai_model_fallback', 'continued', error);
         },
       },
     );
 
     // Catat waktu respons dan penggunaan token.
-    const elapsedSeconds = (
-      (Date.now() - aiStart) / 1000
-    ).toFixed(2);
-
     const usage = response.usageMetadata || {};
-
-    logEvent(
-      'success',
-      'Respons Gemini diterima',
-      `${elapsedSeconds}s`
-    );
-
-    logEvent(
-      'ai',
-      'Penggunaan token',
-      `Input: ${usage.promptTokenCount ?? '?'} | ` +
-      `Output: ${usage.candidatesTokenCount ?? '?'} | ` +
-      `Total: ${usage.totalTokenCount ?? '?'}`
-    );
+    logStage?.('ai_provider_response', 'completed', undefined, {
+      durationMs: Date.now() - aiStart,
+      inputTokens: usage.promptTokenCount,
+      outputTokens: usage.candidatesTokenCount,
+      totalTokens: usage.totalTokenCount,
+    });
 
     return readAssistantResponse(response);
   }
@@ -343,7 +341,7 @@ function logDivider() {
 
 const incomingMessageQueue = createMessageQueue({ maxPending: 3 });
 const incomingMessageDeduplicator = createMessageDeduplicator();
-let acceptingMessages = false;
+const runtimeReadiness = createRuntimeReadinessGate();
 let fridayReadyAt = 0;
 let client;
 let whatsappAdapters;
@@ -362,7 +360,10 @@ function configureClientEvents(clientInstance) {
   });
 
   clientInstance.on('ready', () => {
-    acceptingMessages = true;
+    if (!runtimeReadiness.markReady()) {
+      logEvent('warn', 'Event WhatsApp ready diabaikan', 'Shutdown sudah dimulai.');
+      return;
+    }
     fridayReadyAt = Math.floor(Date.now() / 1000);
 
     const c = terminal;
@@ -487,8 +488,25 @@ const messageService = createMessageService({
   },
   logger: {
     event: logEvent,
+    stage: (stage, fields) => {
+      console.log(JSON.stringify({
+        timestamp: new Date().toISOString(),
+        component: 'conversation',
+        stage,
+        correlationId: fields.correlationId,
+        outcome: fields.outcome,
+        ...(fields.category ? { category: fields.category } : {}),
+        ...safeConversationLogMetadata(fields),
+      }));
+    },
     error: (label, error) => {
-      console.error(`[${label}]`, inspect(error, { depth: 6, colors: false }));
+      console.error(JSON.stringify({
+        timestamp: new Date().toISOString(),
+        component: 'conversation',
+        stage: 'application_error',
+        outcome: 'failed',
+        category: classifyConversationError(error, label),
+      }));
     },
   },
 });
@@ -496,7 +514,7 @@ const messageService = createMessageService({
 function registerMessageHandler(clientInstance) {
   registerQueuedMessageHandler(clientInstance, {
     botName: BOT_NAME,
-    canAccept: () => acceptingMessages,
+    canAccept: () => runtimeReadiness.canAccept(),
     isQueueableMessage,
     getDeduplicationKey: getMessageDeduplicationKey,
     deduplicator: incomingMessageDeduplicator,
@@ -505,11 +523,17 @@ function registerMessageHandler(clientInstance) {
     handle: (message, transport) => messageService.handle(message, transport),
     reply: (message) => whatsappAdapters.reply(message),
     logger: {
-      log: console.log.bind(console),
-      error: (...args) => console.error(
-        args[0],
-        inspect(args[1], { depth: 4, colors: false }),
-      ),
+      stage: (stage, fields) => console.log(JSON.stringify({
+        timestamp: new Date().toISOString(),
+        component: 'conversation',
+        stage,
+        correlationId: fields.correlationId,
+        outcome: fields.outcome,
+        ...(fields.category ? { category: fields.category } : {}),
+        ...safeConversationLogMetadata(fields),
+      })),
+      log: () => {},
+      error: () => {},
     },
   });
 }
@@ -551,7 +575,7 @@ const application = createApplication({
     await createdClient.initialize();
   },
   stopAccepting: () => {
-    acceptingMessages = false;
+    runtimeReadiness.stop();
   },
   drainMessages: () => incomingMessageQueue.drain(),
   logger: console,

@@ -1,3 +1,8 @@
+import {
+  createConversationCorrelationId,
+  classifyConversationError,
+} from '../application/conversation-observability.js';
+
 /**
  * Converts a whatsapp-web.js message into the transport-neutral contract used
  * by the application service.
@@ -134,42 +139,90 @@ export function registerQueuedMessageHandler(
   },
 ) {
   client.on('message', (message) => {
-    if (!canAccept()) return;
-    if (!isQueueableMessage(message, botName)) return;
+    const correlationId = createConversationCorrelationId();
+    if (!canAccept()) {
+      logger.stage?.('message_received', {
+        correlationId,
+        outcome: 'rejected',
+        category: 'validation_error',
+      });
+      return;
+    }
+    if (!isQueueableMessage(message, botName)) {
+      logger.stage?.('message_received', {
+        correlationId,
+        outcome: 'rejected',
+        category: 'validation_error',
+      });
+      return;
+    }
 
     const deduplicationKey = getDeduplicationKey(message);
 
     if (!deduplicator.claim(deduplicationKey)) {
-      logger.log('[Diabaikan] Event pesan WhatsApp duplikat.');
+      logger.stage?.('message_received', {
+        correlationId,
+        outcome: 'rejected',
+        category: 'validation_error',
+      });
       return;
     }
 
     const queuedMessage = queue.enqueue(message.from, () => {
+      logger.stage?.('message_processing_started', {
+        correlationId,
+        outcome: 'started',
+      });
       const normalizedMessage = normalize(message);
-      if (!normalizedMessage) return undefined;
-      return handle(normalizedMessage, {
+      if (!normalizedMessage) {
+        logger.stage?.('message_normalized', {
+          correlationId,
+          outcome: 'rejected',
+          category: 'validation_error',
+        });
+        return undefined;
+      }
+      return handle({ ...normalizedMessage, correlationId }, {
         reply: reply(message),
       });
     });
 
     if (!queuedMessage) {
       deduplicator.release(deduplicationKey);
-      void reply(message)(
+      logger.stage?.('message_received', {
+        correlationId,
+        outcome: 'rejected',
+        category: 'validation_error',
+      });
+      void Promise.resolve().then(() => reply(message)(
         'Aku masih memproses beberapa pesan di chat ini. Pesan baru ini belum masuk antrean, coba kirim lagi sebentar ya.',
-      ).catch((error) => {
-        logger.error(
-          '[Pemberitahuan antrean penuh gagal]',
-          error?.message || error,
-        );
+      )).then((result) => {
+        logger.stage?.('queue_full_notice_submission', {
+          correlationId,
+          outcome: result == null ? 'uncertain' : 'submitted',
+          category: result == null ? 'transport_uncertain' : undefined,
+        });
+      }).catch((error) => {
+        logger.stage?.('queue_full_notice_submission', {
+          correlationId,
+          outcome: 'uncertain',
+          category: classifyConversationError(error, 'transport'),
+        });
       });
       return;
     }
 
+    logger.stage?.('message_received', {
+      correlationId,
+      outcome: 'accepted',
+    });
+
     queuedMessage.catch((error) => {
-      logger.error(
-        '[Pemrosesan pesan antrean gagal]',
-        error,
-      );
+      logger.stage?.('queue_processing', {
+        correlationId,
+        outcome: 'failed',
+        category: classifyConversationError(error, 'queue'),
+      });
     });
   });
 }

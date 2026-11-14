@@ -1,4 +1,8 @@
 import { MAX_ASSISTANT_RESPONSE_BYTES } from '../ai/conversation-context.js';
+import {
+  classifyConversationError,
+  createConversationCorrelationId,
+} from './conversation-observability.js';
 
 /**
  * @typedef {Object} NormalizedIncomingMessage
@@ -44,7 +48,7 @@ import { MAX_ASSISTANT_RESPONSE_BYTES } from '../ai/conversation-context.js';
 export function createMessageService(dependencies) {
   const activeSessions = new Set();
 
-  async function saveSubmittedConversationTurn(sessionId, userText, assistantText) {
+  async function saveSubmittedConversationTurn(sessionId, userText, assistantText, emitStage) {
     try {
       if (typeof dependencies.history.saveConversationTurn !== 'function') {
         throw new TypeError('An atomic conversation history writer is required.');
@@ -54,10 +58,11 @@ export function createMessageService(dependencies) {
         userText,
         assistantText,
       );
+      emitStage('history_persistence', 'succeeded');
     } catch (error) {
       // The send call returned a message result, but recipient delivery is not
       // confirmed here. Do not issue a duplicate response on DB failure.
-      dependencies.logger?.error('Riwayat balasan yang dikirim gagal disimpan', error);
+      emitStage('history_persistence', 'failed', error);
     }
   }
 
@@ -67,6 +72,55 @@ export function createMessageService(dependencies) {
    */
   async function handle(message, transport) {
     if (!message) return;
+
+    const correlationId = message.correlationId || createConversationCorrelationId();
+    let outboundAttempted = false;
+    let failureStageLogged = false;
+    const emitStage = (stage, outcome, error, metadata = {}) => {
+      dependencies.logger?.stage?.(stage, {
+        correlationId,
+        outcome,
+        ...(error ? { category: classifyConversationError(error, stage) } : {}),
+        ...(Number.isFinite(metadata.durationMs) ? { durationMs: metadata.durationMs } : {}),
+        ...(Number.isFinite(metadata.inputTokens) ? { inputTokens: metadata.inputTokens } : {}),
+        ...(Number.isFinite(metadata.outputTokens) ? { outputTokens: metadata.outputTokens } : {}),
+        ...(Number.isFinite(metadata.totalTokens) ? { totalTokens: metadata.totalTokens } : {}),
+        ...(typeof metadata.operation === 'string' ? { operation: metadata.operation.slice(0, 80) } : {}),
+      });
+    };
+    const logError = (operation, error) => emitStage(
+      'application_error',
+      'failed',
+      error?.error || error,
+      { operation },
+    );
+    const submitReply = async (text) => {
+      outboundAttempted = true;
+      emitStage('reply_submission', 'started');
+      try {
+        const result = await transport.reply(text);
+        emitStage('reply_submission', result == null ? 'uncertain' : 'submitted',
+          result == null ? Object.assign(new Error('Reply result is missing.'), { code: 'TRANSPORT_UNCERTAIN' }) : undefined);
+        return result;
+      } catch (error) {
+        emitStage('reply_submission', 'uncertain', error);
+        throw error;
+      }
+    };
+    const submitMedia = async (stage, send) => {
+      outboundAttempted = true;
+      emitStage(stage, 'started');
+      try {
+        const result = await send();
+        emitStage(stage, result == null ? 'uncertain' : 'submitted',
+          result == null ? Object.assign(new Error('Outbound result is missing.'), { code: 'TRANSPORT_UNCERTAIN' }) : undefined);
+        return result;
+      } catch (error) {
+        emitStage(stage, 'uncertain', error);
+        throw error;
+      }
+    };
+    emitStage('message_processing', 'started');
 
     try {
       const isVoiceNote = message.messageType === 'ptt';
@@ -118,13 +172,13 @@ export function createMessageService(dependencies) {
         question = question.replace(prefix, '').trim();
 
         if (!question && !isVoiceNote && !isImage) {
-          await transport.reply(
+          await submitReply(
             `Halo! Aku ${dependencies.botName}. Ada yang bisa kubantu?`,
           );
           return;
         }
       } else if (!question && !isVoiceNote && !isImage) {
-        await transport.reply(
+        await submitReply(
           `Halo! Aku ${dependencies.botName}. Ada yang bisa kubantu?`,
         );
         return;
@@ -135,7 +189,7 @@ export function createMessageService(dependencies) {
         try {
           commandResult = dependencies.commands.route(question);
         } catch (error) {
-          dependencies.logger?.error('Router perintah gagal', error);
+          emitStage('command_router', 'failed', error);
           commandResult = {
             handled: true,
             response: 'Perintah belum bisa diproses sekarang. Coba lagi nanti ya.',
@@ -144,11 +198,10 @@ export function createMessageService(dependencies) {
 
         if (commandResult?.handled) {
           try {
-            await transport.reply(commandResult.response);
+            await submitReply(commandResult.response);
           } catch (error) {
             // Sending may have succeeded remotely despite a transport rejection.
             // Avoid a second reply after that uncertain side effect.
-            dependencies.logger?.error('Pengiriman balasan perintah gagal', error);
           }
           return;
         }
@@ -160,7 +213,7 @@ export function createMessageService(dependencies) {
         dependencies.video.isDownloadRequest(question);
 
       if (asksToDownloadVideo && socialVideoUrls.length > 1) {
-        await transport.reply(
+        await submitReply(
           'Kirim satu tautan TikTok atau Instagram dulu ya, supaya aku bisa mengunduh videonya.',
         );
         return;
@@ -178,7 +231,7 @@ export function createMessageService(dependencies) {
 
       if (memoryCommand && !isImage && !isVoiceNote) {
         if (isGroup) {
-          await transport.reply(
+          await submitReply(
             'Memori Friday hanya tersedia di chat pribadi dan tidak disimpan dari grup. Kirim perintah memori langsung ke chat pribadi Friday, ya.',
           );
           return;
@@ -191,7 +244,7 @@ export function createMessageService(dependencies) {
           );
 
           if (reply) {
-            await transport.reply(dependencies.formatMessage(reply));
+            await submitReply(dependencies.formatMessage(reply));
             dependencies.logger?.event(
               'success',
               'Perintah memori diproses',
@@ -199,8 +252,8 @@ export function createMessageService(dependencies) {
             );
           }
         } catch (error) {
-          dependencies.logger?.error('Perintah memori gagal', error);
-          await transport.reply(
+          emitStage('memory_command', 'failed', error);
+          await submitReply(
             'Memorimu belum berhasil diproses. Coba lagi sebentar ya.',
           );
           dependencies.logger?.event(
@@ -216,7 +269,7 @@ export function createMessageService(dependencies) {
       const sessionId = privateSession;
 
       if (activeSessions.has(sessionId)) {
-        await transport.reply(
+        await submitReply(
           'Sebentar ya, aku masih memproses pesan sebelumnya.',
         );
         return;
@@ -230,34 +283,24 @@ export function createMessageService(dependencies) {
           let videoStage = 'download';
 
           try {
+            emitStage('video_download', 'started');
             videoResult = await dependencies.video.download(socialVideoUrls[0]);
+            emitStage('video_download', 'completed');
             videoStage = 'send';
-            await dependencies.deliver.sendVideo(
+            await submitMedia('video_submission', () => dependencies.deliver.sendVideo(
               message.chatId,
               videoResult,
               'Ini video dari tautan yang kamu kirim.',
-            );
+            ));
             dependencies.logger?.event(
               'success',
               'Video berhasil diunduh dan dikirim',
               'WhatsApp',
             );
           } catch (error) {
-            dependencies.logger?.error(
-              videoStage === 'send'
-                ? 'Pengiriman video WhatsApp gagal'
-                : 'Unduhan video gagal',
-              error,
-            );
-            await transport.reply(
+            if (videoStage === 'download') emitStage('video_download', 'failed', error);
+            await submitReply(
               dependencies.video.getFailureMessage(error, videoStage),
-            );
-            dependencies.logger?.event(
-              'error',
-              videoStage === 'send'
-                ? 'Pengiriman video WhatsApp gagal'
-                : 'Unduhan video gagal',
-              error?.code || 'periksa log terminal',
             );
           } finally {
             if (videoResult?.cleanup) {
@@ -269,21 +312,35 @@ export function createMessageService(dependencies) {
         }
 
         if (isVoiceNote) {
-          const media = await message.media?.download();
+          emitStage('voice_media_download', 'started');
+          let media;
+          try {
+            media = await message.media?.download();
+            emitStage('voice_media_download', media ? 'completed' : 'uncertain');
+          } catch (error) {
+            emitStage('voice_media_download', 'failed', error);
+            throw error;
+          }
 
           if (!media) {
-            await transport.reply(
+            await submitReply(
               'Maaf, Voice Note tidak bisa diunduh. Coba kirim ulang ya.',
             );
             return;
           }
 
-          const transcript = (
-            await dependencies.audio.transcribe(media)
-          )?.trim();
+          emitStage('voice_transcription', 'started');
+          let transcript;
+          try {
+            transcript = (await dependencies.audio.transcribe(media))?.trim();
+            emitStage('voice_transcription', transcript ? 'completed' : 'uncertain');
+          } catch (error) {
+            emitStage('voice_transcription', 'failed', error);
+            throw error;
+          }
 
           if (!transcript) {
-            await transport.reply(
+            await submitReply(
               'Maaf, isi Voice Note belum bisa kupahami. Coba kirim ulang atau tuliskan pesannya ya.',
             );
             return;
@@ -300,30 +357,26 @@ export function createMessageService(dependencies) {
           let media;
 
           try {
+            emitStage('image_media_download', 'started');
             media = await message.media?.download();
+            emitStage('image_media_download', media ? 'completed' : 'uncertain');
           } catch (error) {
-            dependencies.logger?.error(
-              'WhatsApp gagal mengunduh gambar',
-              {
-                error,
-                diagnostics: message.media?.diagnostics,
-              },
-            );
-            await transport.reply(
-              'Aku menerima fotonya, tetapi WhatsApp gagal mengunduh file gambar. Coba teruskan fotonya ke chat Friday. Jika masih gagal, admin perlu memeriksa detail error WhatsApp Web di log.',
+            emitStage('image_media_download', 'failed', error);
+            await submitReply(
+              'Aku menerima fotonya, tetapi WhatsApp gagal mengunduh file gambar. Coba teruskan fotonya ke chat Friday. Jika masih gagal, pengelola perlu memeriksa koneksi WhatsApp Web.',
             );
             return;
           }
 
           if (!media) {
-            await transport.reply(
+            await submitReply(
               'Maaf, gambar belum bisa dibaca. Coba kirim ulang ya.',
             );
             return;
           }
 
           if (!media.mimetype?.startsWith('image/')) {
-            await transport.reply(
+            await submitReply(
               'File yang diterima bukan gambar yang didukung.',
             );
             return;
@@ -338,16 +391,12 @@ export function createMessageService(dependencies) {
                 media,
                 stickerOptions,
               );
-              const sentStickerMessage = await dependencies.deliver.sendSticker(
+              const sentStickerMessage = await submitMedia('sticker_submission', () => dependencies.deliver.sendSticker(
                 message.chatId,
                 stickerResult,
                 dependencies.botName,
-              );
+              ));
               if (sentStickerMessage == null) {
-                dependencies.logger?.error(
-                  'WhatsApp tidak mengembalikan pesan stiker yang terkirim',
-                  new Error('Outbound sticker message result is missing.'),
-                );
                 return;
               }
 
@@ -361,6 +410,7 @@ export function createMessageService(dependencies) {
                 stickerSession,
                 userMessage,
                 'Stiker berhasil dibuat dan dikirim.',
+                emitStage,
               );
               dependencies.logger?.event(
                 'success',
@@ -368,14 +418,11 @@ export function createMessageService(dependencies) {
                 'WhatsApp',
               );
             } catch (error) {
-              dependencies.logger?.error('Pembuatan stiker gagal', error);
-              await transport.reply(
+              if (!outboundAttempted) {
+                emitStage('sticker_processing', 'failed', error, { operation: 'sticker_creation' });
+              }
+              await submitReply(
                 dependencies.sticker.getFailureMessage(error),
-              );
-              dependencies.logger?.event(
-                'error',
-                'Pembuatan atau pengiriman stiker gagal',
-                error?.code || 'periksa log terminal',
               );
             } finally {
               if (stickerResult?.cleanup) {
@@ -402,19 +449,8 @@ export function createMessageService(dependencies) {
           try {
             generatedImage = await dependencies.image.generate(question);
           } catch (error) {
-            if (dependencies.image.isQuotaError(error)) {
-              dependencies.logger?.event(
-                'error',
-                'Kuota generate gambar tidak tersedia',
-                dependencies.image.getQuotaDiagnostic(error),
-              );
-            } else {
-              dependencies.logger?.error(
-                'Pembuatan gambar gagal',
-                error,
-              );
-            }
-            await transport.reply(
+            emitStage('image_generation', 'failed', error);
+            await submitReply(
               dependencies.image.getFailureMessage(error),
             );
             return;
@@ -423,16 +459,12 @@ export function createMessageService(dependencies) {
           const caption = (
             generatedImage.text || 'Ini gambar yang kamu minta.'
           ).slice(0, 1000);
-          const sentImageMessage = await dependencies.deliver.sendImage(
+          const sentImageMessage = await submitMedia('image_submission', () => dependencies.deliver.sendImage(
             message.chatId,
             generatedImage,
             dependencies.formatMessage(caption),
-          );
+          ));
           if (sentImageMessage == null) {
-            dependencies.logger?.error(
-              'WhatsApp tidak mengembalikan pesan gambar yang terkirim',
-              new Error('Outbound image message result is missing.'),
-            );
             return;
           }
 
@@ -445,6 +477,7 @@ export function createMessageService(dependencies) {
             activeSession,
             userMessage,
             `Gambar dibuat untuk permintaan: ${question}`,
+            emitStage,
           );
           dependencies.logger?.event(
             'success',
@@ -454,18 +487,26 @@ export function createMessageService(dependencies) {
           return;
         }
 
-        dependencies.logger?.event(
-          'info',
-          `Pesan masuk · ${isGroup ? 'Grup' : 'Pribadi'}`,
-          `Sesi: ${sessionId}`,
-        );
-        const answer = await dependencies.assistant.ask({
+        emitStage('message_routed', 'accepted');
+        emitStage('ai_request', 'started');
+        let answer;
+        try {
+          answer = await dependencies.assistant.ask({
           question,
           privateSession,
           sharedGroupSession,
           senderName,
           image,
-        });
+          correlationId,
+          logStage: emitStage,
+          });
+          emitStage('ai_request', 'completed');
+          emitStage('ai_response_validation', 'succeeded');
+        } catch (error) {
+          emitStage('ai_request', 'failed', error);
+          failureStageLogged = true;
+          throw error;
+        }
 
         const asksForVoice =
           /\b(?:vn|voice[\s-]?note|voice message|pesan suara)\b/i.test(question) ||
@@ -477,6 +518,7 @@ export function createMessageService(dependencies) {
           let audioResult = null;
           let audioSent = false;
           let assistantResponseSubmitted = false;
+          let voiceSubmissionStarted = false;
 
           try {
             audioResult = await dependencies.audio.generate(answer);
@@ -487,15 +529,11 @@ export function createMessageService(dependencies) {
               );
             }
 
-            const sentVoiceMessage = await dependencies.deliver.sendVoice(
-              message.chatId,
-              audioResult.path,
-            );
+            const sentVoiceMessage = await submitMedia('voice_submission', () => {
+              voiceSubmissionStarted = true;
+              return dependencies.deliver.sendVoice(message.chatId, audioResult.path);
+            });
             if (sentVoiceMessage == null) {
-              dependencies.logger?.error(
-                'WhatsApp tidak mengembalikan pesan voice yang terkirim',
-                new Error('Outbound voice message result is missing.'),
-              );
               return;
             }
             audioSent = true;
@@ -506,18 +544,8 @@ export function createMessageService(dependencies) {
               'WhatsApp',
             );
           } catch (error) {
-            dependencies.logger?.error(
-              'TTS/pengiriman audio gagal',
-              error,
-            );
+            if (!voiceSubmissionStarted) emitStage('voice_generation', 'failed', error);
 
-            if (dependencies.audio.isQuotaError(error)) {
-              dependencies.logger?.event(
-                'warn',
-                'Kuota Voice Note tercapai',
-                `Status: ${error?.status || error?.code || 'unknown'}; detail lengkap ada di log terminal.`,
-              );
-            }
 
             const fallbackText = dependencies.audio.getFailureMessage(
               error,
@@ -529,29 +557,23 @@ export function createMessageService(dependencies) {
               const containsAssistantAnswer =
                 Buffer.byteLength(formattedFallback, 'utf8') <=
                 MAX_ASSISTANT_RESPONSE_BYTES;
-              const sentTextMessage = await transport.reply(containsAssistantAnswer
+              const sentTextMessage = await submitReply(containsAssistantAnswer
                 ? formattedFallback
                 : 'Voice Note tidak tersedia dan jawaban terlalu panjang untuk dikirim. Coba minta rangkuman, ya.');
               if (sentTextMessage == null) {
-                dependencies.logger?.error(
-                  'WhatsApp tidak mengembalikan pesan fallback yang terkirim',
-                  new Error('Outbound fallback message result is missing.'),
-                );
+                // The reply submission stage already records the uncertain result.
               } else {
                 assistantResponseSubmitted = containsAssistantAnswer;
               }
             } catch (replyError) {
-              dependencies.logger?.error(
-                'Fallback teks gagal',
-                replyError,
-              );
+              // The reply submission stage records the uncertain transport result.
             }
           } finally {
             if (audioResult?.cleanup) {
               try {
                 await audioResult.cleanup();
               } catch (cleanupError) {
-                dependencies.logger?.error(
+                logError(
                   'Cleanup audio gagal',
                   cleanupError,
                 );
@@ -571,6 +593,7 @@ export function createMessageService(dependencies) {
               sharedGroupSession || privateSession,
               userText,
               answer,
+              emitStage,
             );
           }
         } else {
@@ -581,18 +604,13 @@ export function createMessageService(dependencies) {
             throw error;
           }
           try {
-            const sentMessage = await transport.reply(formattedAnswer);
+            const sentMessage = await submitReply(formattedAnswer);
             if (sentMessage == null) {
-              dependencies.logger?.error(
-                'WhatsApp tidak mengembalikan pesan balasan yang terkirim',
-                new Error('Outbound assistant message result is missing.'),
-              );
               return;
             }
           } catch (error) {
             // The remote send may have completed before the transport failed.
             // Do not send a second fallback message with an uncertain outcome.
-            dependencies.logger?.error('Pengiriman balasan WhatsApp gagal', error);
             return;
           }
           const userText = isGroup ? `${senderName}: ${question}` : question;
@@ -600,6 +618,7 @@ export function createMessageService(dependencies) {
             sharedGroupSession || privateSession,
             userText,
             answer,
+            emitStage,
           );
           dependencies.logger?.event(
             'success',
@@ -611,14 +630,15 @@ export function createMessageService(dependencies) {
         activeSessions.delete(sessionId);
       }
     } catch (error) {
-      dependencies.logger?.error('DETAIL ERROR FRIDAY', error);
+      if (!outboundAttempted && !failureStageLogged) {
+        emitStage('message_processing', 'failed', error);
+      }
+      if (outboundAttempted) return;
       const fallbackMessage = dependencies.assistant.getFailureMessage(error);
 
       try {
-        await transport.reply(fallbackMessage);
-      } catch (replyError) {
-        dependencies.logger?.error('Fallback gagal', replyError);
-      }
+        await submitReply(fallbackMessage);
+      } catch {}
     }
   }
 

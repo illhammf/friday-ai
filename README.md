@@ -104,6 +104,16 @@ file:
 npm ci
 ```
 
+If you use [nvm](https://github.com/nvm-sh/nvm), select the supported major
+version in the same terminal before installing or starting Friday:
+
+```bash
+nvm install 24
+nvm use 24
+node --version
+npm --version
+```
+
 ### 3. Install media tools
 
 Install `ffmpeg` using your operating system's package manager. Install
@@ -303,6 +313,7 @@ service if every configured model is unavailable or out of quota.
 ## Runtime checks and tests
 
 ```bash
+node --version # Must report v24 or newer
 npm run doctor  # Check Node.js, API-key presence, ffmpeg, and yt-dlp
 npm run check   # Syntax-check the application entry point
 npm test        # Run automated feature and regression tests

@@ -159,6 +159,44 @@ test('routes a private chat to AI with the private session and replies with form
   ]);
 });
 
+test('emits correlated safe stage fields without logging message or answer content', async () => {
+  const stages = [];
+  const { calls, service } = createHarness({
+    logger: { stage: (stage, fields) => stages.push({ stage, ...fields }) },
+  });
+  const message = createMessage({
+    correlationId: 'correlation-test-1',
+    text: 'private message sentinel',
+  });
+
+  await service.handle(message, createMessenger(calls));
+
+  assert.ok(stages.some(({ stage, outcome }) => stage === 'message_processing' && outcome === 'started'));
+  assert.ok(stages.some(({ stage, outcome }) => stage === 'ai_request' && outcome === 'completed'));
+  assert.ok(stages.some(({ stage, outcome }) => stage === 'ai_response_validation' && outcome === 'succeeded'));
+  assert.ok(stages.some(({ stage, outcome }) => stage === 'reply_submission' && outcome === 'submitted'));
+  assert.ok(stages.some(({ stage, outcome }) => stage === 'history_persistence' && outcome === 'succeeded'));
+  assert.ok(stages.every(({ correlationId }) => correlationId === 'correlation-test-1'));
+  const serializedStages = JSON.stringify(stages);
+  assert.equal(serializedStages.includes('private message sentinel'), false);
+  assert.equal(serializedStages.includes('Jawaban AI'), false);
+});
+
+test('records an uncertain null reply result and neither persists nor sends a fallback', async () => {
+  const stages = [];
+  const { calls, service } = createHarness({
+    logger: { stage: (stage, fields) => stages.push({ stage, ...fields }) },
+  });
+  await service.handle(createMessage({ correlationId: 'uncertain-1' }), {
+    reply: async () => null,
+  });
+
+  assert.equal(calls.some(([type]) => type === 'save'), false);
+  assert.equal(calls.some(([type]) => type === 'reply'), false);
+  assert.ok(stages.some(({ stage, outcome, category }) =>
+    stage === 'reply_submission' && outcome === 'uncertain' && category === 'transport_uncertain'));
+});
+
 test('requires the bot prefix in groups and handles prefixed greetings', async () => {
   const { calls, service } = createHarness();
 
@@ -240,13 +278,16 @@ test('group commands still require the existing bot prefix', async () => {
 });
 
 test('command router errors receive a safe response without invoking Gemini', async () => {
+  const stages = [];
   const { calls, service } = createHarness({
     commands: { route: () => { throw new Error('private diagnostic'); } },
+    logger: { stage: (stage, fields) => stages.push({ stage, ...fields }) },
   });
   await service.handle(createMessage({ text: '/ping' }), createMessenger(calls));
   assert.equal(calls.some(([type]) => type === 'ask'), false);
   assert.match(calls.find(([type]) => type === 'reply')[1], /belum bisa diproses/);
-  assert.equal(calls.some(([, label, error]) => label === 'Router perintah gagal' && error.message === 'private diagnostic'), true);
+  assert.ok(stages.some(({ stage, outcome, category }) =>
+    stage === 'command_router' && outcome === 'failed' && category === 'internal_error'));
 });
 
 test('failed command delivery is not retried with a second fallback message', async () => {
@@ -275,7 +316,10 @@ test('ignores whitespace-only and unsupported text messages without calling Gemi
 });
 
 test('does not send a fallback after an uncertain final WhatsApp reply failure', async () => {
-  const { calls, service } = createHarness();
+  const stages = [];
+  const { calls, service } = createHarness({
+    logger: { stage: (stage, fields) => stages.push({ stage, ...fields }) },
+  });
   const transport = {
     reply: async (text) => {
       calls.push(['reply', text]);
@@ -285,12 +329,16 @@ test('does not send a fallback after an uncertain final WhatsApp reply failure',
   await service.handle(createMessage(), transport);
   assert.equal(calls.filter(([type]) => type === 'reply').length, 1);
   assert.equal(calls.some(([type]) => type === 'ask'), true);
-  assert.equal(calls.some(([, label]) => label === 'Pengiriman balasan WhatsApp gagal'), true);
+  assert.ok(stages.some(({ stage, outcome, category }) =>
+    stage === 'reply_submission' && outcome === 'uncertain' && category === 'transport_uncertain'));
   assert.equal(calls.some(([type]) => type === 'save'), false);
 });
 
 test('does not persist a turn when WhatsApp resolves without a sent-message result', async () => {
-  const { calls, service } = createHarness();
+  const stages = [];
+  const { calls, service } = createHarness({
+    logger: { stage: (stage, fields) => stages.push({ stage, ...fields }) },
+  });
   const transport = {
     reply: async (text) => {
       calls.push(['reply', text]);
@@ -300,11 +348,14 @@ test('does not persist a turn when WhatsApp resolves without a sent-message resu
   await service.handle(createMessage(), transport);
   assert.equal(calls.filter(([type]) => type === 'reply').length, 1);
   assert.equal(calls.some(([type]) => type === 'save'), false);
-  assert.equal(calls.some(([, label]) => label === 'WhatsApp tidak mengembalikan pesan balasan yang terkirim'), true);
+  assert.ok(stages.some(({ stage, outcome, category }) =>
+    stage === 'reply_submission' && outcome === 'uncertain' && category === 'transport_uncertain'));
 });
 
 test('does not retry a delivered answer when conversation history persistence fails', async () => {
+  const stages = [];
   const { calls, service } = createHarness({
+    logger: { stage: (stage, fields) => stages.push({ stage, ...fields }) },
     history: {
       saveConversationTurn: () => {
         throw new Error('database write failed');
@@ -316,7 +367,8 @@ test('does not retry a delivered answer when conversation history persistence fa
     ['reply', 'Jawaban AI'],
   ]);
   assert.equal(calls.some(([type]) => type === 'ask'), true);
-  assert.equal(calls.some(([, label]) => label === 'Riwayat balasan yang dikirim gagal disimpan'), true);
+  assert.ok(stages.some(({ stage, outcome, category }) =>
+    stage === 'history_persistence' && outcome === 'failed' && category === 'persistence_error'));
 });
 
 test('stores group turns only in the shared group conversation session', async () => {
@@ -493,17 +545,22 @@ test('saves generated-image history only after sending the image', async () => {
 });
 
 test('does not persist a generated-image turn when WhatsApp returns no message result', async () => {
+  const stages = [];
   const { calls, service } = createHarness({
     deliver: { sendImage: async () => undefined },
+    logger: { stage: (stage, fields) => stages.push({ stage, ...fields }) },
   });
   await service.handle(createMessage({ text: 'Buat gambar seekor kucing' }), createMessenger(calls));
   assert.equal(calls.some(([type]) => type === 'sendImage'), false);
   assert.equal(calls.some(([type]) => type === 'save'), false);
-  assert.equal(calls.some(([, label]) => label === 'WhatsApp tidak mengembalikan pesan gambar yang terkirim'), true);
+  assert.ok(stages.some(({ stage, outcome, category }) =>
+    stage === 'image_submission' && outcome === 'uncertain' && category === 'transport_uncertain'));
 });
 
 test('uses the safe AI failure response when processing fails', async () => {
+  const stages = [];
   const { calls, service } = createHarness({
+    logger: { stage: (stage, fields) => stages.push({ stage, ...fields }) },
     assistant: {
       ask: async () => {
         throw new Error('provider detail');
@@ -513,7 +570,8 @@ test('uses the safe AI failure response when processing fails', async () => {
 
   await service.handle(createMessage(), createMessenger(calls));
 
-  assert.equal(calls.some(([type]) => type === 'error'), true);
+  assert.ok(stages.some(({ stage, outcome, category }) =>
+    stage === 'ai_request' && outcome === 'failed' && category === 'provider_error'));
   assert.deepEqual(calls.filter(([type]) => type === 'reply').at(-1), [
     'reply',
     'AI sedang bermasalah.',

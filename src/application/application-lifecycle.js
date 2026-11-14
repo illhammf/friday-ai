@@ -7,6 +7,9 @@ import { createShutdownHandler } from '../whatsapp/shutdown.js';
  * @property {(client: Object, database: Object) => Promise<void>|void} [configureClient]
  * @property {(client: Object, database: Object) => Promise<void>|void} initializeClient
  * @property {() => Promise<void>|void} drainMessages
+ * @property {number} [drainTimeoutMs]
+ * @property {number} [cleanupTimeoutMs]
+ * @property {number} [startupTimeoutMs]
  * @property {() => Promise<void>|void} stopAccepting
  * @property {Object} logger
  * @property {(code: number) => void} [setExitCode]
@@ -25,10 +28,16 @@ export function createApplication(dependencies) {
   let cleanupPromise;
   let shutdownPromise;
   let shutdownRequested = false;
+  const startupTimeoutMs = Number.isFinite(dependencies.startupTimeoutMs) &&
+    dependencies.startupTimeoutMs > 0
+    ? dependencies.startupTimeoutMs
+    : 30_000;
 
   const shutdownResources = createShutdownHandler({
     stopAccepting: dependencies.stopAccepting,
     drainMessages: dependencies.drainMessages,
+    drainTimeoutMs: dependencies.drainTimeoutMs,
+    cleanupTimeoutMs: dependencies.cleanupTimeoutMs,
     destroyClient: async () => {
       if (client) {
         await client.destroy();
@@ -41,6 +50,10 @@ export function createApplication(dependencies) {
     },
     logger: dependencies.logger,
     setExitCode: dependencies.setExitCode,
+    onComplete: ({ completed, failed }) => {
+      if (completed) state = failed ? 'failed' : 'stopped';
+      else state = 'failed';
+    },
   });
 
   const application = {
@@ -99,7 +112,36 @@ export function createApplication(dependencies) {
       shutdownRequested = true;
       state = 'stopping';
       shutdownPromise = (async () => {
+        await shutdownResources.stopAccepting();
         if (startPromise) {
+          let timer;
+          const startupOutcome = await Promise.race([
+            startPromise.then(
+              () => 'settled',
+              () => 'settled',
+            ),
+            new Promise((resolve) => {
+              timer = setTimeout(() => resolve('timeout'), startupTimeoutMs);
+            }),
+          ]);
+          clearTimeout(timer);
+
+          if (startupOutcome === 'timeout') {
+            dependencies.logger?.error?.(
+              `[Shutdown] startup belum selesai setelah ${startupTimeoutMs} ms; resource tetap terbuka sampai startup berhenti.`,
+            );
+            (dependencies.setExitCode || ((code) => { process.exitCode = code; }))(1);
+            startPromise.then(
+              () => cleanup(signal),
+              () => cleanup(signal),
+            ).catch((error) => {
+              dependencies.logger?.error?.(
+                `[Shutdown] cleanup tertunda gagal (${error?.name || 'Error'}).`,
+              );
+              (dependencies.setExitCode || ((code) => { process.exitCode = code; }))(1);
+            });
+            return false;
+          }
           await startPromise.catch(() => {});
         }
         return cleanup(signal);
@@ -111,13 +153,7 @@ export function createApplication(dependencies) {
 
   function cleanup(signal) {
     if (!cleanupPromise) {
-      cleanupPromise = (async () => {
-        try {
-          await shutdownResources(signal);
-        } finally {
-          state = 'stopped';
-        }
-      })();
+      cleanupPromise = shutdownResources(signal);
     }
 
     return cleanupPromise;
