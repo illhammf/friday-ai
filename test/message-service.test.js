@@ -79,8 +79,6 @@ function createHarness(overrides = {}) {
     assistant: {
       ask: async (input) => {
         calls.push(['ask', input]);
-        calls.push(['save', input.sharedGroupSession || input.privateSession, 'user']);
-        calls.push(['save', input.sharedGroupSession || input.privateSession, 'model']);
         return 'Jawaban AI';
       },
       getFailureMessage: () => 'AI sedang bermasalah.',
@@ -96,6 +94,10 @@ function createHarness(overrides = {}) {
     },
     history: {
       save: (...args) => calls.push(['save', ...args]),
+      saveConversationTurn: (sessionId, userText, assistantText) => {
+        calls.push(['save', sessionId, 'user', userText]);
+        calls.push(['save', sessionId, 'model', assistantText]);
+      },
     },
     formatMessage: (text) => text,
     deliver: {
@@ -284,6 +286,69 @@ test('does not send a fallback after an uncertain final WhatsApp reply failure',
   assert.equal(calls.filter(([type]) => type === 'reply').length, 1);
   assert.equal(calls.some(([type]) => type === 'ask'), true);
   assert.equal(calls.some(([, label]) => label === 'Pengiriman balasan WhatsApp gagal'), true);
+  assert.equal(calls.some(([type]) => type === 'save'), false);
+});
+
+test('does not persist a turn when WhatsApp resolves without a sent-message result', async () => {
+  const { calls, service } = createHarness();
+  const transport = {
+    reply: async (text) => {
+      calls.push(['reply', text]);
+      return undefined;
+    },
+  };
+  await service.handle(createMessage(), transport);
+  assert.equal(calls.filter(([type]) => type === 'reply').length, 1);
+  assert.equal(calls.some(([type]) => type === 'save'), false);
+  assert.equal(calls.some(([, label]) => label === 'WhatsApp tidak mengembalikan pesan balasan yang terkirim'), true);
+});
+
+test('does not retry a delivered answer when conversation history persistence fails', async () => {
+  const { calls, service } = createHarness({
+    history: {
+      saveConversationTurn: () => {
+        throw new Error('database write failed');
+      },
+    },
+  });
+  await service.handle(createMessage(), createMessenger(calls));
+  assert.deepEqual(calls.filter(([type]) => type === 'reply'), [
+    ['reply', 'Jawaban AI'],
+  ]);
+  assert.equal(calls.some(([type]) => type === 'ask'), true);
+  assert.equal(calls.some(([, label]) => label === 'Riwayat balasan yang dikirim gagal disimpan'), true);
+});
+
+test('stores group turns only in the shared group conversation session', async () => {
+  const { calls, service } = createHarness();
+  await service.handle(createMessage({
+    chatId: 'group-1@g.us',
+    senderId: 'member-1@c.us',
+    chatType: 'group',
+    text: 'Friday, jelaskan ini',
+    group: { senderName: 'Ari' },
+  }), createMessenger(calls));
+
+  const userSave = calls.find(([type, , role]) => type === 'save' && role === 'user');
+  const modelSave = calls.find(([type, , role]) => type === 'save' && role === 'model');
+  assert.deepEqual(userSave.slice(1), [
+    'group:group-1@g.us', 'user', 'Ari: jelaskan ini',
+  ]);
+  assert.deepEqual(modelSave.slice(1), [
+    'group:group-1@g.us', 'model', 'Jawaban AI',
+  ]);
+});
+
+test('rejects an oversized formatted assistant reply without persisting the turn', async () => {
+  const { calls, service } = createHarness({
+    assistant: { ask: async () => 'x'.repeat(32 * 1024) },
+    formatMessage: () => 'x'.repeat(32 * 1024 + 1),
+  });
+  await service.handle(createMessage(), createMessenger(calls));
+  assert.deepEqual(calls.filter(([type]) => type === 'reply'), [
+    ['reply', 'AI sedang bermasalah.'],
+  ]);
+  assert.equal(calls.some(([type]) => type === 'save'), false);
 });
 
 test('keeps memory commands private and scopes them to the sender private session', async () => {
@@ -397,7 +462,7 @@ test('transcribes incoming voice notes and uses the voice reply delivery path', 
   assert.equal(calls.some(([type]) => type === 'reply'), false);
 });
 
-test('keeps successful AI persistence before outbound reply delivery', async () => {
+test('persists an assistant turn atomically after outbound reply delivery', async () => {
   const { calls, service } = createHarness();
 
   await service.handle(createMessage(), createMessenger(calls));
@@ -405,9 +470,12 @@ test('keeps successful AI persistence before outbound reply delivery', async () 
   const userSaveIndex = calls.findIndex(([type, , role]) => type === 'save' && role === 'user');
   const modelSaveIndex = calls.findIndex(([type, , role]) => type === 'save' && role === 'model');
   const replyIndex = calls.findIndex(([type]) => type === 'reply');
-  assert.ok(userSaveIndex >= 0);
+  assert.ok(replyIndex >= 0);
+  assert.ok(userSaveIndex > replyIndex);
   assert.ok(modelSaveIndex > userSaveIndex);
-  assert.ok(replyIndex > modelSaveIndex);
+  assert.deepEqual(calls[userSaveIndex].slice(1), [
+    'private:user-1@c.us', 'user', 'Halo Friday',
+  ]);
 });
 
 test('saves generated-image history only after sending the image', async () => {
@@ -422,6 +490,16 @@ test('saves generated-image history only after sending the image', async () => {
   assert.ok(sendIndex >= 0);
   assert.ok(saveIndex > sendIndex);
   assert.equal(calls.some(([type]) => type === 'ask'), false);
+});
+
+test('does not persist a generated-image turn when WhatsApp returns no message result', async () => {
+  const { calls, service } = createHarness({
+    deliver: { sendImage: async () => undefined },
+  });
+  await service.handle(createMessage({ text: 'Buat gambar seekor kucing' }), createMessenger(calls));
+  assert.equal(calls.some(([type]) => type === 'sendImage'), false);
+  assert.equal(calls.some(([type]) => type === 'save'), false);
+  assert.equal(calls.some(([, label]) => label === 'WhatsApp tidak mengembalikan pesan gambar yang terkirim'), true);
 });
 
 test('uses the safe AI failure response when processing fails', async () => {

@@ -64,3 +64,22 @@ test('maps chat AI service failures to clear WhatsApp-safe explanations', () => 
     );
   }
 });
+
+test('maps request, malformed response, and oversized answer errors safely', () => {
+  assert.match(
+    getAiFailureMessage({ code: 'ASSISTANT_REQUEST_TOO_LARGE' }),
+    /terlalu panjang.*ringkas/i,
+  );
+  assert.match(
+    getAiFailureMessage({ code: 'INVALID_ASSISTANT_REQUEST' }),
+    /Riwayat percakapan belum bisa diproses/i,
+  );
+  assert.match(
+    getAiFailureMessage({ code: 'EMPTY_AI_RESPONSE' }),
+    /belum menghasilkan jawaban teks/i,
+  );
+  assert.match(
+    getAiFailureMessage({ code: 'AI_RESPONSE_TOO_LARGE' }),
+    /Jawaban AI terlalu panjang/i,
+  );
+});

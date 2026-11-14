@@ -295,8 +295,6 @@ function createService(calls) {
     assistant: {
       ask: async (input) => {
         calls.push(['assistant', input]);
-        calls.push(['persist', 'user']);
-        calls.push(['persist', 'model']);
         return 'assistant reply';
       },
       getFailureMessage: () => 'AI failure',
@@ -309,6 +307,10 @@ function createService(calls) {
     },
     history: {
       save: (_session, role) => calls.push(['persist', role]),
+      saveConversationTurn: (_session, userText, assistantText) => {
+        calls.push(['persist', 'user', userText]);
+        calls.push(['persist', 'model', assistantText]);
+      },
     },
     formatMessage: (text) => text,
     deliver: {
@@ -317,7 +319,10 @@ function createService(calls) {
       sendImage: async () => {},
       sendVoice: async (...args) => calls.push(['sendVoice', ...args]),
     },
-    logger: { event: () => {}, error: () => {} },
+    logger: {
+      event: () => {},
+      error: (label, error) => calls.push(['error', label, error?.message]),
+    },
   });
 }
 
@@ -341,7 +346,10 @@ test('integrates event queue, deduplication, normalization, service, and reply a
       async () => null,
     ),
     handle: (message, transport) => service.handle(message, transport),
-    reply: (message) => (text) => message.reply(text),
+    reply: (message) => (text) => {
+      calls.push(['reply', text]);
+      return message.reply(text);
+    },
     logger: { log: () => {}, error: (...args) => calls.push(['error', ...args]) },
   });
 
@@ -383,11 +391,23 @@ test('integrates event queue, deduplication, normalization, service, and reply a
   assert.equal(groupCall.question, 'help');
   assert.equal(groupCall.sharedGroupSession, 'group:room@g.us');
   assert.deepEqual(calls.filter(([kind]) => kind === 'persist'), [
-    ['persist', 'user'],
-    ['persist', 'model'],
-    ['persist', 'user'],
-    ['persist', 'model'],
+    ['persist', 'user', 'Hello Friday'],
+    ['persist', 'model', 'assistant reply'],
+    ['persist', 'user', 'Member: help'],
+    ['persist', 'model', 'assistant reply'],
+  ], JSON.stringify(calls));
+  assert.deepEqual(calls.filter(([kind]) => kind === 'reply'), [
+    ['reply', 'assistant reply'],
+    ['reply', 'assistant reply'],
   ]);
+  const replyIndexes = calls
+    .map(([kind], index) => kind === 'reply' ? index : -1)
+    .filter((index) => index >= 0);
+  const persistIndexes = calls
+    .map(([kind], index) => kind === 'persist' ? index : -1)
+    .filter((index) => index >= 0);
+  assert.ok(replyIndexes[0] < persistIndexes[0]);
+  assert.ok(replyIndexes[1] < persistIndexes[2]);
 });
 
 test('integrates incoming image vision, sticker priority, and voice-note delivery', async () => {

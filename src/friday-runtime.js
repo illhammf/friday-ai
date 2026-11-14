@@ -55,6 +55,12 @@ import {
   inspectRuntime,
 } from './config/runtime-diagnostics.js';
 import { getAiFailureMessage } from './ai/ai-failure-message.js';
+import { ASSISTANT_REQUEST_LIMITS } from './ai/assistant-request.js';
+import {
+  buildConversationContents,
+  normalizeConversationHistory,
+  readAssistantResponse,
+} from './ai/conversation-context.js';
 import { createMessageService } from './application/message-service.js';
 import { createCommandRouter } from './application/command-router.js';
 import { createApplication } from './application/application-lifecycle.js';
@@ -252,37 +258,26 @@ function logDivider() {
       ? sharedGroupSession
       : privateSession;
 
-    const history = database.loadHistory(activeSession, 10);
+    const rawHistory = database.loadHistory(activeSession, 10);
+    const normalizedHistory = normalizeConversationHistory(rawHistory);
+    const history = normalizedHistory.history;
+    if (normalizedHistory.removedEmptyEntries > 0) {
+      logEvent(
+        'warn',
+        'Entri riwayat kosong dilewati',
+        `Jumlah: ${normalizedHistory.removedEmptyEntries}`,
+      );
+    }
+    if (normalizedHistory.excludedOlderEntries > 0) {
+      logEvent(
+        'warn',
+        'Riwayat lama dikeluarkan dari konteks Gemini',
+        `Jumlah: ${normalizedHistory.excludedOlderEntries}; batas teks history aplikasi: ${ASSISTANT_REQUEST_LIMITS.maxHistoryTextBytes} byte`,
+      );
+    }
     const userMemories = isGroup
       ? []
       : memoryService.retrieve(privateSession, question);
-
-    // Identitas pengirim hanya ditambahkan pada pesan grup.
-    const userMessage = isGroup
-      ? `${senderName}: ${question}`
-      : question;
-
-    // Tambahkan pertanyaan pengguna dan lampiran gambar (jika ada) ke dalam konten percakapan.
-    const userParts = [
-      { text: userMessage || 'Tolong jelaskan gambar ini.' },
-    ];
-    // Jika ada lampiran gambar, tambahkan ke konten percakapan.
-    if (image) {
-      userParts.push({
-        inlineData: {
-          mimeType: image.mimetype,
-          data: image.data,
-        },
-      });
-    }
-
-    const contents = [
-      ...history,
-      {
-        role: 'user',
-        parts: userParts,
-      },
-    ];
 
     const conversationStyle = detectConversationStyle(question, history);
     const dynamicStyle = getStyleInstruction(conversationStyle);
@@ -297,6 +292,15 @@ function logDivider() {
         getMemoryInstruction(userMemories),
       ].filter(Boolean).join('\n\n'),
     };
+
+    const { contents } = buildConversationContents({
+      question,
+      history,
+      image,
+      systemInstruction: config.systemInstruction,
+      conversationType: isGroup ? 'group' : 'private',
+      senderName,
+    });
 
     let response;
 
@@ -333,17 +337,7 @@ function logDivider() {
       `Total: ${usage.totalTokenCount ?? '?'}`
     );
 
-    const answer = response.text?.trim();
-
-    if (!answer) {
-      throw new Error('AI tidak menghasilkan jawaban.');
-    }
-
-    // Simpan hanya ke sesi yang benar-benar digunakan.
-    database.saveMessage(activeSession, 'user', userMessage);
-    database.saveMessage(activeSession, 'model', answer);
-
-    return answer;
+    return readAssistantResponse(response);
   }
 
 
@@ -481,6 +475,8 @@ const messageService = createMessageService({
   },
   history: {
     save: (...args) => databaseOperations.saveMessage(...args),
+    saveConversationTurn: (...args) =>
+      databaseOperations.saveConversationTurn(...args),
   },
   formatMessage: formatWhatsAppMessage,
   deliver: {

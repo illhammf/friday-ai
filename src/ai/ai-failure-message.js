@@ -15,6 +15,19 @@ export function getAiFailureMessage(error) {
   const status = Number(error?.status || error?.code);
   const details = getErrorDetails(error);
 
+  if (error?.code === 'ASSISTANT_REQUEST_TOO_LARGE') {
+    return 'Pesan atau konteks percakapan terlalu panjang untuk diproses. Coba ringkas pesan atau minta jawaban lebih singkat ya.';
+  }
+  if (error?.code === 'AI_RESPONSE_TOO_LARGE') {
+    return 'Jawaban AI terlalu panjang untuk dikirim. Coba minta rangkuman atau bagi pertanyaannya menjadi beberapa bagian ya.';
+  }
+  if (error?.code === 'INVALID_AI_RESPONSE' || error?.code === 'EMPTY_AI_RESPONSE') {
+    return 'AI belum menghasilkan jawaban teks yang bisa digunakan. Coba kirim ulang pesanmu ya.';
+  }
+  if (error?.code === 'INVALID_ASSISTANT_REQUEST') {
+    return 'Riwayat percakapan belum bisa diproses dengan aman. Coba kirim ulang pesan; jika terus terjadi, pengelola perlu memeriksa log.';
+  }
+
   if (
     status === 429 ||
     /RESOURCE_EXHAUSTED|quota exceeded|rate.?limit/i.test(details)

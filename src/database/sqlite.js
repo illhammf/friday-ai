@@ -117,6 +117,27 @@ export function createDatabase({
         insertMessage.run(sessionId, role, content);
         trimHistory.run(sessionId, sessionId);
       },
+      saveConversationTurn(sessionId, userContent, modelContent) {
+        ensureOpen();
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          insertMessage.run(sessionId, 'user', userContent);
+          insertMessage.run(sessionId, 'model', modelContent);
+          trimHistory.run(sessionId, sessionId);
+          db.exec('COMMIT');
+        } catch (error) {
+          try {
+            db.exec('ROLLBACK');
+          } catch (rollbackError) {
+            throw new AggregateError(
+              [error, rollbackError],
+              'Conversation turn persistence failed and rollback was unsuccessful.',
+              { cause: error },
+            );
+          }
+          throw error;
+        }
+      },
       loadHistory(sessionId, limit = 10) {
         ensureOpen();
         return getHistory.all(sessionId)

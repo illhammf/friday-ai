@@ -98,6 +98,34 @@ test('database factory preserves history limits, ordering, and shape', { skip: s
   });
 });
 
+test('saves an assistant conversation turn atomically and rolls back partial writes', { skip: skipSQLiteTests }, async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const database = sqliteModule.createDatabase({
+      dbPath: join(directory, 'conversation-turn.sqlite'),
+    });
+
+    try {
+      database.saveConversationTurn('private:user', 'question', 'answer');
+      assert.deepEqual(database.loadHistory('private:user'), [
+        { role: 'user', parts: [{ text: 'question' }] },
+        { role: 'model', parts: [{ text: 'answer' }] },
+      ]);
+
+      assert.throws(() => database.saveConversationTurn(
+        'private:user',
+        'must rollback',
+        null,
+      ));
+      assert.deepEqual(database.loadHistory('private:user'), [
+        { role: 'user', parts: [{ text: 'question' }] },
+        { role: 'model', parts: [{ text: 'answer' }] },
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+});
+
 test('database factory preserves memory operations and session isolation', { skip: skipSQLiteTests }, async () => {
   await withTemporaryDirectory(async (directory) => {
     const database = sqliteModule.createDatabase({
@@ -228,8 +256,6 @@ test('database, application lifecycle, and message service share only injected t
         },
         assistant: {
           ask: async ({ privateSession, question }) => {
-            database.saveMessage(privateSession, 'user', question);
-            database.saveMessage(privateSession, 'model', 'temporary reply');
             return 'temporary reply';
           },
           getFailureMessage: () => 'error',
@@ -240,7 +266,11 @@ test('database, application lifecycle, and message service share only injected t
           isQuotaError: () => false,
           getFailureMessage: (_error, text) => text,
         },
-        history: { save: (...args) => database.saveMessage(...args) },
+        history: {
+          save: (...args) => database.saveMessage(...args),
+          saveConversationTurn: (...args) =>
+            database.saveConversationTurn(...args),
+        },
         formatMessage: (text) => text,
         deliver: {
           sendVideo: async () => {},

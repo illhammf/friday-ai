@@ -147,7 +147,9 @@ export function registerQueuedMessageHandler(
     const queuedMessage = queue.enqueue(message.from, () => {
       const normalizedMessage = normalize(message);
       if (!normalizedMessage) return undefined;
-      return handle(normalizedMessage, reply(message));
+      return handle(normalizedMessage, {
+        reply: reply(message),
+      });
     });
 
     if (!queuedMessage) {

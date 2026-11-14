@@ -1,3 +1,5 @@
+import { MAX_ASSISTANT_RESPONSE_BYTES } from '../ai/conversation-context.js';
+
 /**
  * @typedef {Object} NormalizedIncomingMessage
  * @property {string|null} messageId
@@ -30,6 +32,7 @@
  * @property {{ask: Function, getFailureMessage: Function}} assistant
  * @property {{transcribe: Function, generate: Function, isQuotaError: Function, getFailureMessage: Function}} audio
  * @property {{save: Function}} history
+ * @property {(sessionId: string, userText: string, assistantText: string) => (Promise<void>|void)} history.saveConversationTurn
  * @property {(text: string) => string} formatMessage
  * @property {{sendVideo: Function, sendSticker: Function, sendImage: Function, sendVoice: Function}} deliver
  * @property {{event?: Function, error?: Function}} logger
@@ -40,6 +43,23 @@
  */
 export function createMessageService(dependencies) {
   const activeSessions = new Set();
+
+  async function saveSubmittedConversationTurn(sessionId, userText, assistantText) {
+    try {
+      if (typeof dependencies.history.saveConversationTurn !== 'function') {
+        throw new TypeError('An atomic conversation history writer is required.');
+      }
+      await dependencies.history.saveConversationTurn(
+        sessionId,
+        userText,
+        assistantText,
+      );
+    } catch (error) {
+      // The send call returned a message result, but recipient delivery is not
+      // confirmed here. Do not issue a duplicate response on DB failure.
+      dependencies.logger?.error('Riwayat balasan yang dikirim gagal disimpan', error);
+    }
+  }
 
   /**
    * @param {NormalizedIncomingMessage} message
@@ -318,11 +338,18 @@ export function createMessageService(dependencies) {
                 media,
                 stickerOptions,
               );
-              await dependencies.deliver.sendSticker(
+              const sentStickerMessage = await dependencies.deliver.sendSticker(
                 message.chatId,
                 stickerResult,
                 dependencies.botName,
               );
+              if (sentStickerMessage == null) {
+                dependencies.logger?.error(
+                  'WhatsApp tidak mengembalikan pesan stiker yang terkirim',
+                  new Error('Outbound sticker message result is missing.'),
+                );
+                return;
+              }
 
               const stickerSession =
                 sharedGroupSession || privateSession;
@@ -330,10 +357,9 @@ export function createMessageService(dependencies) {
                 ? `${senderName}: ${question}`
                 : question;
 
-              dependencies.history.save(stickerSession, 'user', userMessage);
-              dependencies.history.save(
+              await saveSubmittedConversationTurn(
                 stickerSession,
-                'model',
+                userMessage,
                 'Stiker berhasil dibuat dan dikirim.',
               );
               dependencies.logger?.event(
@@ -397,21 +423,27 @@ export function createMessageService(dependencies) {
           const caption = (
             generatedImage.text || 'Ini gambar yang kamu minta.'
           ).slice(0, 1000);
-          await dependencies.deliver.sendImage(
+          const sentImageMessage = await dependencies.deliver.sendImage(
             message.chatId,
             generatedImage,
             dependencies.formatMessage(caption),
           );
+          if (sentImageMessage == null) {
+            dependencies.logger?.error(
+              'WhatsApp tidak mengembalikan pesan gambar yang terkirim',
+              new Error('Outbound image message result is missing.'),
+            );
+            return;
+          }
 
           const activeSession = sharedGroupSession || privateSession;
           const userMessage = isGroup
             ? `${senderName}: ${question}`
             : question;
 
-          dependencies.history.save(activeSession, 'user', userMessage);
-          dependencies.history.save(
+          await saveSubmittedConversationTurn(
             activeSession,
-            'model',
+            userMessage,
             `Gambar dibuat untuk permintaan: ${question}`,
           );
           dependencies.logger?.event(
@@ -444,6 +476,7 @@ export function createMessageService(dependencies) {
         if (isVoiceNote || asksForVoice) {
           let audioResult = null;
           let audioSent = false;
+          let assistantResponseSubmitted = false;
 
           try {
             audioResult = await dependencies.audio.generate(answer);
@@ -454,8 +487,19 @@ export function createMessageService(dependencies) {
               );
             }
 
-            await dependencies.deliver.sendVoice(message.chatId, audioResult.path);
+            const sentVoiceMessage = await dependencies.deliver.sendVoice(
+              message.chatId,
+              audioResult.path,
+            );
+            if (sentVoiceMessage == null) {
+              dependencies.logger?.error(
+                'WhatsApp tidak mengembalikan pesan voice yang terkirim',
+                new Error('Outbound voice message result is missing.'),
+              );
+              return;
+            }
             audioSent = true;
+            assistantResponseSubmitted = true;
             dependencies.logger?.event(
               'voice',
               'Voice Note berhasil dikirim',
@@ -481,9 +525,21 @@ export function createMessageService(dependencies) {
             );
 
             try {
-              await transport.reply(
-                dependencies.formatMessage(fallbackText),
-              );
+              const formattedFallback = dependencies.formatMessage(fallbackText);
+              const containsAssistantAnswer =
+                Buffer.byteLength(formattedFallback, 'utf8') <=
+                MAX_ASSISTANT_RESPONSE_BYTES;
+              const sentTextMessage = await transport.reply(containsAssistantAnswer
+                ? formattedFallback
+                : 'Voice Note tidak tersedia dan jawaban terlalu panjang untuk dikirim. Coba minta rangkuman, ya.');
+              if (sentTextMessage == null) {
+                dependencies.logger?.error(
+                  'WhatsApp tidak mengembalikan pesan fallback yang terkirim',
+                  new Error('Outbound fallback message result is missing.'),
+                );
+              } else {
+                assistantResponseSubmitted = containsAssistantAnswer;
+              }
             } catch (replyError) {
               dependencies.logger?.error(
                 'Fallback teks gagal',
@@ -509,15 +565,42 @@ export function createMessageService(dependencies) {
               'Proses pengiriman selesai',
             );
           }
+          if (assistantResponseSubmitted) {
+            const userText = isGroup ? `${senderName}: ${question}` : question;
+            await saveSubmittedConversationTurn(
+              sharedGroupSession || privateSession,
+              userText,
+              answer,
+            );
+          }
         } else {
+          const formattedAnswer = dependencies.formatMessage(answer);
+          if (Buffer.byteLength(formattedAnswer, 'utf8') > MAX_ASSISTANT_RESPONSE_BYTES) {
+            const error = new Error('Formatted assistant response is too large.');
+            error.code = 'AI_RESPONSE_TOO_LARGE';
+            throw error;
+          }
           try {
-            await transport.reply(dependencies.formatMessage(answer));
+            const sentMessage = await transport.reply(formattedAnswer);
+            if (sentMessage == null) {
+              dependencies.logger?.error(
+                'WhatsApp tidak mengembalikan pesan balasan yang terkirim',
+                new Error('Outbound assistant message result is missing.'),
+              );
+              return;
+            }
           } catch (error) {
             // The remote send may have completed before the transport failed.
             // Do not send a second fallback message with an uncertain outcome.
             dependencies.logger?.error('Pengiriman balasan WhatsApp gagal', error);
             return;
           }
+          const userText = isGroup ? `${senderName}: ${question}` : question;
+          await saveSubmittedConversationTurn(
+            sharedGroupSession || privateSession,
+            userText,
+            answer,
+          );
           dependencies.logger?.event(
             'success',
             'Jawaban teks berhasil dikirim',
