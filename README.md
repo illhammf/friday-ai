@@ -269,8 +269,10 @@ temporarily prevent downloads.
 ### Voice notes
 
 Incoming voice notes are transcribed before Friday generates a response.
-Friday may send a voice reply; if voice generation or delivery fails, it
-provides a text explanation and the answer as text instead.
+Friday may send a voice reply. If voice generation fails before sending, it
+can provide the answer as text. If WhatsApp's voice-send result is uncertain,
+Friday does not send a second reply because the voice note may already have
+been accepted.
 
 ### Manage private memory
 
