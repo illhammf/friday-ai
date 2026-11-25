@@ -72,7 +72,8 @@ export function createTerminalPresenter({
 
   function stage(stageName, fields = {}) {
     const event = { timestamp: now().toISOString(), component: 'conversation', stage: stageName, ...fields };
-    if (safeMode === 'quiet') return;
+    const critical = fields.outcome === 'failed' || fields.outcome === 'uncertain';
+    if (safeMode === 'quiet' && !critical) return;
     if (safeMode === 'json') return json(event);
     const [label, tone] = STAGES[stageName] || ['RUNTIME', 'cyan'];
     let outcome = fields.outcome === 'submitted' ? 'ANSWER SUBMITTED'
@@ -93,7 +94,19 @@ export function createTerminalPresenter({
 
   return Object.freeze({
     startup({ name = 'FRIDAY AI', version = 'unknown', model = 'unknown', nodeVersion = process.version } = {}) {
-      if (safeMode !== 'human') return;
+      if (safeMode === 'quiet') return;
+      if (safeMode === 'json') {
+        return json({
+          timestamp: now().toISOString(),
+          component: 'runtime',
+          event: 'startup',
+          name,
+          version,
+          model,
+          nodeVersion,
+          status: 'starting',
+        });
+      }
       const date = localDate(now(), activeTimezone);
       write(paint('╭──────────────────────────────────────────────╮', 'cyan'));
       write(`${paint('│', 'cyan')} ${paint(name, 'bold')} ${paint(`v${version}`, 'gray')}`);
@@ -103,7 +116,7 @@ export function createTerminalPresenter({
       write(paint('╰──────────────────────────────────────────────╯', 'cyan'));
     },
     status(label, tone = 'cyan', detail = '') {
-      if (safeMode === 'quiet') return;
+      if (safeMode === 'quiet' && tone !== 'red') return;
       if (safeMode === 'json') return json({ timestamp: now().toISOString(), component: 'runtime', status: label, detail });
       write(`${timestamp()} ${paint('●', tone)} ${paint(label, tone)}${detail ? ` ${paint(`— ${detail}`, 'gray')}` : ''}`);
     },
@@ -117,7 +130,7 @@ export function createTerminalPresenter({
     stage,
     event(type, title, detail = '') {
       const tone = ({ success: 'green', warn: 'yellow', error: 'red', ai: 'purple', voice: 'blue' })[type] || 'cyan';
-      if (safeMode === 'quiet') return;
+      if (safeMode === 'quiet' && type !== 'error') return;
       if (safeMode === 'json') return json({ timestamp: now().toISOString(), component: 'runtime', type, title, detail });
       write(`${timestamp()} ${paint('●', tone)} ${paint(title, tone)}${detail ? ` ${paint(`— ${detail}`, 'gray')}` : ''}`, { error: type === 'error' });
     },

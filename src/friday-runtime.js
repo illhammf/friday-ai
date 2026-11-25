@@ -414,6 +414,7 @@ let memoryService;
 function configureClientEvents(clientInstance) {
   clientInstance.on('qr', (qr) => {
     terminalPresenter.status('WHATSAPP QR REQUIRED', 'yellow', 'Pindai QR pada WhatsApp Perangkat tertaut.');
+    if (process.env.FRIDAY_LOG_MODE === 'json' || process.env.FRIDAY_LOG_MODE === 'quiet') return;
     console.log('\nPindai QR ini menggunakan WhatsApp FRIDAY:');
     qrcode.generate(qr, { small: true });
     console.log('\nBuka WhatsApp > Perangkat tertaut > Tautkan perangkat.');
@@ -599,6 +600,15 @@ function registerMessageHandler(clientInstance) {
   });
 }
 
+const lifecycleLogger = Object.freeze({
+  log(message) {
+    terminalPresenter.event('info', 'RUNTIME', String(message).replace(/[\u0000-\u001F\u007F]/g, ' ').slice(0, 240));
+  },
+  error(message) {
+    terminalPresenter.event('error', 'RUNTIME ERROR', String(message).replace(/[\u0000-\u001F\u007F]/g, ' ').slice(0, 240));
+  },
+});
+
 const application = createApplication({
   openDatabase: () => {
     databaseOperations = initializeDefaultDatabase();
@@ -639,7 +649,7 @@ const application = createApplication({
     runtimeReadiness.stop();
   },
   drainMessages: () => incomingMessageQueue.drain(),
-  logger: console,
+  logger: lifecycleLogger,
 });
 
 let signalHandlersRegistered = false;

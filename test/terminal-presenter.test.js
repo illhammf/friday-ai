@@ -54,6 +54,24 @@ test('json mode keeps safe operational fields and does not include previews', ()
   assert.doesNotMatch(stream.text(), /private content/);
 });
 
+test('json startup is machine-readable and quiet mode still reports critical failures', () => {
+  const jsonStream = sink();
+  const jsonPresenter = createTerminalPresenter({ mode: 'json', stream: jsonStream, errorStream: jsonStream });
+  jsonPresenter.startup({ name: 'FRIDAY AI', version: '1.0.0', model: 'gemini-test' });
+  const startup = JSON.parse(jsonStream.text());
+  assert.equal(startup.event, 'startup');
+  assert.equal(startup.status, 'starting');
+
+  const quietStream = sink();
+  const quietPresenter = createTerminalPresenter({ mode: 'quiet', stream: quietStream, errorStream: quietStream });
+  quietPresenter.stage('ai_provider_response', { outcome: 'completed' });
+  quietPresenter.stage('reply_submission', { outcome: 'uncertain', category: 'transport_uncertain' });
+  quietPresenter.event('error', 'RUNTIME ERROR', 'safe diagnostic');
+  assert.match(quietStream.text(), /DELIVERY UNCERTAIN/);
+  assert.match(quietStream.text(), /RUNTIME ERROR/);
+  assert.doesNotMatch(quietStream.text(), /GENERATING RESPONSE/);
+});
+
 test('terminal write failures are isolated from the caller', () => {
   const stream = { isTTY: false, write() { throw new Error('closed'); } };
   const presenter = createTerminalPresenter({ stream, errorStream: stream });

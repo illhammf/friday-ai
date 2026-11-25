@@ -61,6 +61,13 @@ Optional settings shown in `.env.example`:
 - `FFMPEG_PATH`, `YT_DLP_PATH`: executable names or local executable paths if not on `PATH`.
 - `YT_DLP_USER_AGENT`: optional request user-agent override.
 - `NODE_ENV`: environment label.
+- `FRIDAY_LOG_MODE`: terminal output mode: `human` (default), `json`, or
+  `quiet`. JSON is suitable for machine collection; quiet suppresses ordinary
+  status lines but still reports critical failures.
+- `FRIDAY_MESSAGE_PREVIEWS`: set to `true` only when short incoming-message
+  previews are appropriate for the local terminal. It is disabled by default.
+- `FRIDAY_TIMEZONE`: IANA timezone for terminal timestamps; defaults safely to
+  `Asia/Jakarta` when omitted or invalid.
 - `AI_PROVIDER` and `BOT_PREFIX` appear in the example template but are not read by the current runtime; changing them does not switch providers or group-prefix behavior.
 
 `.env`, `.wwebjs_auth/`, `.wwebjs_cache/`, SQLite files under `data/`, and log files are excluded by `.gitignore`. Keep those local files private anyway.
@@ -88,6 +95,16 @@ Friday stores conversation history and explicit memories in `data/friday.sqlite`
 - Save memory only with the existing explicit private memory command. Do not test private memory in a group.
 - Try image, Voice Note, sticker, and video features only when their local prerequisites are installed and the test content is appropriate to send to Gemini.
 - A successful local send result is not proof the recipient received/read it. If a send outcome is uncertain, do not repeat the same request immediately; first check the chat and terminal to avoid a duplicate action.
+
+### Terminal output modes
+
+Human mode is the normal daily-use view. It shows colored, readable lifecycle
+states when attached to a compatible TTY. Set `NO_COLOR=1` to disable ANSI
+colors, or use a non-TTY/piped output; the content remains readable. Use
+`FRIDAY_LOG_MODE=json` for structured records and `FRIDAY_LOG_MODE=quiet` for
+minimal output in automation. In every mode, `SUBMITTED` means only that the
+local WhatsApp SDK returned a result; `DELIVERY UNCERTAIN` never means the
+recipient received or read the message.
 
 ## Safe shutdown
 
