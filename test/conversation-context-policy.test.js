@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isExplicitTopicSwitch,
+  isIdentityQuestion,
+  isOpenTopicQuestion,
+  isRecentHistoryQuestion,
   isShortNonSubstantiveMessage,
   selectConversationContext,
 } from '../src/ai/conversation-context-policy.js';
@@ -135,4 +138,34 @@ test('explicit historical recall can still retrieve the pre-switch topic', () =>
     entry('model', 'Baik, kita bahas Java.'),
   ], 'Apa yang aku pelajari sebelum Java?');
   assert.match(JSON.stringify(selected.history), /Dart/);
+});
+
+test('classifies identity, open-topic, recent-recall, and stretched short messages', () => {
+  assert.equal(isShortNonSubstantiveMessage('Tess'), true);
+  assert.equal(isShortNonSubstantiveMessage('Hehe'), true);
+  assert.equal(isIdentityQuestion('Loh aku belum tanya, kamu siapa sih?'), true);
+  assert.equal(isIdentityQuestion('Akuu mau bahas emm.., kamu aja deh hahaha'), true);
+  assert.equal(isOpenTopicQuestion('Coba sekarang kita bahas apa'), true);
+  assert.equal(isRecentHistoryQuestion('Tadi barusan kita bahas apa sih'), true);
+});
+
+test('open-topic question clears old active-topic context without deleting history', () => {
+  const selected = selectConversationContext([
+    entry('user', 'Sekarang kita bahas Java Inheritance.'),
+    entry('model', 'Baik, kita bahas Java.'),
+  ], 'Coba sekarang kita bahas apa');
+  assert.deepEqual(selected.history, []);
+  assert.equal(selected.intent, 'open_topic');
+});
+
+test('recent-history wording keeps recent exchanges even without topic keywords', () => {
+  const selected = selectConversationContext([
+    entry('user', 'Apa itu SQA?'),
+    entry('model', 'SQA adalah Software Quality Assurance.'),
+  ], 'Tadi barusan kita bahas apa sih?');
+  assert.deepEqual(selected.history, [
+    entry('user', 'Apa itu SQA?'),
+    entry('model', 'SQA adalah Software Quality Assurance.'),
+  ]);
+  assert.equal(selected.intent, 'recent_recall');
 });

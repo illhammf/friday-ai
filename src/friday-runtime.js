@@ -62,6 +62,8 @@ import {
   readAssistantResponse,
 } from './ai/conversation-context.js';
 import {
+  getConversationIntentInstruction,
+  isIdentityQuestion,
   isShortNonSubstantiveMessage,
   selectConversationContext,
 } from './ai/conversation-context-policy.js';
@@ -346,6 +348,8 @@ function safeConversationLogMetadata(fields) {
       });
     }
     const userMemories = isGroup || isShortNonSubstantiveMessage(question)
+      || isIdentityQuestion(question)
+      || historySelection.intent === 'recent_recall'
       ? []
       : memoryService.retrieve(privateSession, question);
 
@@ -358,6 +362,7 @@ function safeConversationLogMetadata(fields) {
     const config = {
       systemInstruction: [
         systemInstruction,
+        getConversationIntentInstruction(historySelection.intent),
         dynamicStyle,
         getMemoryInstruction(userMemories),
       ].filter(Boolean).join('\n\n'),

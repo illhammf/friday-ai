@@ -2,9 +2,10 @@ import { getMemoryTerms } from './memory-retriever.js';
 
 export const RECENT_CONVERSATION_MESSAGES = 4;
 export const RELEVANT_EARLIER_MESSAGES = 4;
+export const RECENT_RECALL_MESSAGES = 8;
 const SHORT_NON_SUBSTANTIVE_MESSAGES = new Set([
   'tes', 'test', 'halo', 'hai', 'pagi', 'siang', 'sore', 'malam',
-  'oke', 'ok', 'makasih', 'terima kasih', 'siap', 'hmm',
+  'oke', 'ok', 'makasih', 'terima kasih', 'siap', 'hmm', 'hehe', 'wkwk',
 ]);
 const GENERIC_CONTEXT_TERMS = new Set([
   'baru', 'saja', 'sedang', 'ingin', 'memahami', 'topik', 'sebutkan',
@@ -21,13 +22,31 @@ function messageText(message) {
 }
 
 export function isShortNonSubstantiveMessage(question) {
-  const normalized = String(question || '').trim().toLocaleLowerCase('id-ID');
+  const normalized = String(question || '')
+    .trim()
+    .toLocaleLowerCase('id-ID')
+    .replace(/(.)\1+/gu, '$1');
   return SHORT_NON_SUBSTANTIVE_MESSAGES.has(normalized);
+}
+
+export function isIdentityQuestion(question) {
+  const text = String(question || '').trim();
+  return /(?:\b(?:siapa|who)\s+(?:kamu|dirimu|you)\b|\b(?:kamu|you)\s+(?:siapa|who)\b|\bperkenalkan(?:\s+dirimu)?\b|\btentang\s+(?:kamu|dirimu|friday)\b|\bbahas\s+(?:kamu|dirimu|friday)\b|\b(?:kamu|dirimu)\s+aja\b)/i.test(text);
+}
+
+export function isRecentHistoryQuestion(question) {
+  return /\b(?:tadi|barusan|baru\s+saja|apa\s+yang\s+(?:kita|aku|saya)\s+(?:bahas|bicarakan)|what\s+did\s+we\s+(?:just\s+)?(?:discuss|talk\s+about)|what\s+were\s+we\s+talking)\b/i.test(String(question || ''));
+}
+
+export function isOpenTopicQuestion(question) {
+  return /^coba(?:\s+deh)?\s+sekarang\s+kita\s+bahas\s+apa\b/i.test(String(question || '').trim());
 }
 
 export function isExplicitTopicSwitch(question) {
   const text = String(question || '').trim();
   if (/^(?:apa|siapa|bagaimana|what|who|how)\b/i.test(text)) return false;
+  if (/^coba(?:\s+deh)?\s+sekarang\s+kita\s+bahas\s+apa\b/i.test(text)) return false;
+  if (isRecentHistoryQuestion(text)) return false;
   return TOPIC_SWITCH_PATTERN.test(text);
 }
 
@@ -50,6 +69,25 @@ export function selectConversationContext(history, question, {
       recentCount: 0,
       relevantEarlierCount: 0,
       excludedEarlierCount: entries.length,
+      intent: 'short',
+    });
+  }
+  if (isIdentityQuestion(question)) {
+    return Object.freeze({
+      history: Object.freeze([]),
+      recentCount: 0,
+      relevantEarlierCount: 0,
+      excludedEarlierCount: entries.length,
+      intent: 'identity',
+    });
+  }
+  if (isOpenTopicQuestion(question)) {
+    return Object.freeze({
+      history: Object.freeze([]),
+      recentCount: 0,
+      relevantEarlierCount: 0,
+      excludedEarlierCount: entries.length,
+      intent: 'open_topic',
     });
   }
   if (isExplicitTopicSwitch(question)) {
@@ -59,6 +97,16 @@ export function selectConversationContext(history, question, {
       relevantEarlierCount: 0,
       excludedEarlierCount: entries.length,
       topicSwitch: true,
+      intent: 'topic_switch',
+    });
+  }
+  if (isRecentHistoryQuestion(question)) {
+    return Object.freeze({
+      history: Object.freeze(entries.slice(-RECENT_RECALL_MESSAGES)),
+      recentCount: Math.min(entries.length, RECENT_RECALL_MESSAGES),
+      relevantEarlierCount: 0,
+      excludedEarlierCount: Math.max(0, entries.length - RECENT_RECALL_MESSAGES),
+      intent: 'recent_recall',
     });
   }
   const recent = entries.slice(-recentLimit);
@@ -94,6 +142,7 @@ export function selectConversationContext(history, question, {
       relevantEarlierCount: 0,
       excludedEarlierCount: entries.length - Math.min(activeTopicHistory.length, recentLimit),
       topicSwitch: true,
+      intent: 'active_topic',
     });
   }
 
@@ -103,5 +152,19 @@ export function selectConversationContext(history, question, {
     relevantEarlierCount: selectedEarlier.length,
     excludedEarlierCount: earlier.length - selectedEarlier.length,
     topicSwitch: false,
+    intent: 'conversation',
   });
+}
+
+export function getConversationIntentInstruction(intent) {
+  const instructions = {
+    short: 'Pesan terbaru adalah sapaan atau tes singkat. Jawab singkat dan natural; jangan menjelaskan topik lama.',
+    identity: 'Pesan terbaru menanyakan FRIDAY. Jawab identitas, peran, kemampuan nyata, atau pengembang secara langsung; jangan menambahkan topik teknis lama.',
+    open_topic: 'Pengguna ingin memilih topik baru. Tanggapi santai dan tanyakan topik yang ingin dibahas tanpa menghidupkan topik lama.',
+    topic_switch: 'Pesan terbaru menetapkan topik baru. Fokuskan jawaban pada topik baru dan jangan membawa topik lama kecuali diminta.',
+    recent_recall: 'Pengguna meminta ringkasan percakapan terbaru. Gunakan pesan terbaru yang benar-benar tersedia; jangan menyebut sesi kosong jika konteks tersedia.',
+    active_topic: 'Jawab berdasarkan topik aktif terbaru. Jangan merangkum seluruh riwayat atau mengulang pertanyaan lama yang tidak relevan.',
+    conversation: 'Jawab pesan terbaru dengan konteks percakapan yang relevan saja.',
+  };
+  return instructions[intent] || instructions.conversation;
 }
