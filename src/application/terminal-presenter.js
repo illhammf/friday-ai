@@ -21,14 +21,27 @@ const STAGES = Object.freeze({
 });
 
 function cleanPreview(value, maxLength) {
-  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  const text = String(value || '')
+    .replace(/[\u001B\u009B][[\]()#;?]*(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*)?\u0007|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g, '')
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
+
+function safeTimezone(timezone) {
+  try {
+    new Intl.DateTimeFormat('id-ID', { timeZone: timezone }).format();
+    return timezone;
+  } catch {
+    return 'Asia/Jakarta';
+  }
 }
 
 function localTime(now, timezone) {
   return new Intl.DateTimeFormat('id-ID', {
     timeZone: timezone, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-  }).format(now);
+  }).format(now).replace(/\./g, ':');
 }
 
 function localDate(now, timezone) {
@@ -47,16 +60,20 @@ export function createTerminalPresenter({
   previews = process.env.FRIDAY_MESSAGE_PREVIEWS === 'true',
   color = stream.isTTY && !process.env.NO_COLOR,
 } = {}) {
-  const useColor = Boolean(color) && mode === 'human';
+  const safeMode = ['human', 'json', 'quiet'].includes(mode) ? mode : 'human';
+  const activeTimezone = safeTimezone(timezone);
+  const useColor = Boolean(color) && stream.isTTY !== false && !process.env.NO_COLOR && safeMode === 'human';
   const paint = (value, tone) => useColor ? `${ANSI[tone] || ''}${value}${ANSI.reset}` : value;
-  const write = (line, { error = false } = {}) => (error ? errorStream : stream).write(`${line}\n`);
-  const timestamp = () => paint(`[${localTime(now(), timezone)}]`, 'gray');
+  const write = (line, { error = false } = {}) => {
+    try { (error ? errorStream : stream).write(`${line}\n`); } catch { /* diagnostics must not break processing */ }
+  };
+  const timestamp = () => paint(`[${localTime(now(), activeTimezone)}]`, 'gray');
   const json = (event) => write(JSON.stringify(event));
 
   function stage(stageName, fields = {}) {
     const event = { timestamp: now().toISOString(), component: 'conversation', stage: stageName, ...fields };
-    if (mode === 'quiet') return;
-    if (mode === 'json') return json(event);
+    if (safeMode === 'quiet') return;
+    if (safeMode === 'json') return json(event);
     const [label, tone] = STAGES[stageName] || ['RUNTIME', 'cyan'];
     let outcome = fields.outcome === 'submitted' ? 'ANSWER SUBMITTED'
       : fields.outcome === 'uncertain' ? 'DELIVERY UNCERTAIN'
@@ -76,8 +93,8 @@ export function createTerminalPresenter({
 
   return Object.freeze({
     startup({ name = 'FRIDAY AI', version = 'unknown', model = 'unknown', nodeVersion = process.version } = {}) {
-      if (mode !== 'human') return;
-      const date = localDate(now(), timezone);
+      if (safeMode !== 'human') return;
+      const date = localDate(now(), activeTimezone);
       write(paint('╭──────────────────────────────────────────────╮', 'cyan'));
       write(`${paint('│', 'cyan')} ${paint(name, 'bold')} ${paint(`v${version}`, 'gray')}`);
       write(`${paint('│', 'cyan')} ${paint(date, 'gray')}`);
@@ -86,22 +103,22 @@ export function createTerminalPresenter({
       write(paint('╰──────────────────────────────────────────────╯', 'cyan'));
     },
     status(label, tone = 'cyan', detail = '') {
-      if (mode === 'quiet') return;
-      if (mode === 'json') return json({ timestamp: now().toISOString(), component: 'runtime', status: label, detail });
+      if (safeMode === 'quiet') return;
+      if (safeMode === 'json') return json({ timestamp: now().toISOString(), component: 'runtime', status: label, detail });
       write(`${timestamp()} ${paint('●', tone)} ${paint(label, tone)}${detail ? ` ${paint(`— ${detail}`, 'gray')}` : ''}`);
     },
     incoming({ conversationType, messageType = 'chat', preview } = {}) {
-      if (mode === 'quiet') return;
+      if (safeMode === 'quiet') return;
       const category = conversationType === 'group' ? 'GROUP MESSAGE' : 'PRIVATE MESSAGE';
-      if (mode === 'json') return json({ timestamp: now().toISOString(), component: 'conversation', event: 'incoming', conversationType, messageType, hasPreview: Boolean(preview) });
+      if (safeMode === 'json') return json({ timestamp: now().toISOString(), component: 'conversation', event: 'incoming', conversationType, messageType, hasPreview: Boolean(preview) });
       write(`${timestamp()} ${paint('●', 'cyan')} ${paint(category, 'cyan')} ${paint(`· ${messageType}`, 'gray')}`);
       if (previews && preview) write(`${paint('           ', 'gray')}${cleanPreview(preview, 160)}`);
     },
     stage,
     event(type, title, detail = '') {
       const tone = ({ success: 'green', warn: 'yellow', error: 'red', ai: 'purple', voice: 'blue' })[type] || 'cyan';
-      if (mode === 'quiet') return;
-      if (mode === 'json') return json({ timestamp: now().toISOString(), component: 'runtime', type, title, detail });
+      if (safeMode === 'quiet') return;
+      if (safeMode === 'json') return json({ timestamp: now().toISOString(), component: 'runtime', type, title, detail });
       write(`${timestamp()} ${paint('●', tone)} ${paint(title, tone)}${detail ? ` ${paint(`— ${detail}`, 'gray')}` : ''}`, { error: type === 'error' });
     },
   });

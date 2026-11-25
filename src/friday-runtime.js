@@ -61,7 +61,9 @@ import {
   normalizeConversationHistory,
   readAssistantResponse,
 } from './ai/conversation-context.js';
+import { selectConversationContext } from './ai/conversation-context-policy.js';
 import { createMessageService } from './application/message-service.js';
+import { createTerminalPresenter } from './application/terminal-presenter.js';
 import { createCommandRouter } from './application/command-router.js';
 import { createApplication } from './application/application-lifecycle.js';
 import {
@@ -93,6 +95,7 @@ const MODELS = getModelChain(
   process.env.GEMINI_FALLBACK_MODELS,
   process.env.GEMINI_FALLBACK_MODEL,
 );
+const terminalPresenter = createTerminalPresenter();
 
 const sleep = (ms) =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -181,6 +184,13 @@ const terminal = {
 };
 
 function printBanner() {
+  terminalPresenter.startup({
+    name: BOT_NAME.toUpperCase(),
+    version: packageMetadata.version,
+    model: MODEL,
+  });
+  return;
+
   const c = terminal;
 
   console.clear();
@@ -230,6 +240,9 @@ const logStyle = {
 };
 
 function logEvent(type, title, detail = '') {
+  terminalPresenter.event(type, title, detail);
+  return;
+
   const styles = {
     info: ['INFO', logStyle.cyan],
     ai: ['GEMINI', logStyle.purple],
@@ -305,7 +318,11 @@ function safeConversationLogMetadata(fields) {
 
     const rawHistory = database.loadHistory(activeSession, 10);
     const normalizedHistory = normalizeConversationHistory(rawHistory);
-    const history = normalizedHistory.history;
+    const historySelection = selectConversationContext(
+      normalizedHistory.history,
+      question,
+    );
+    const history = historySelection.history;
     if (normalizedHistory.removedEmptyEntries > 0) {
       logEvent(
         'warn',
@@ -319,6 +336,11 @@ function safeConversationLogMetadata(fields) {
         'Riwayat lama dikeluarkan dari konteks Gemini',
         `Jumlah: ${normalizedHistory.excludedOlderEntries}; batas teks history aplikasi: ${ASSISTANT_REQUEST_LIMITS.maxHistoryTextBytes} byte`,
       );
+    }
+    if (historySelection.excludedEarlierCount > 0) {
+      logStage?.('conversation_context', 'completed', undefined, {
+        operation: `recent=${historySelection.recentCount}; relevantEarlier=${historySelection.relevantEarlierCount}; excludedEarlier=${historySelection.excludedEarlierCount}`,
+      });
     }
     const userMemories = isGroup
       ? []
@@ -391,13 +413,15 @@ let memoryService;
 
 function configureClientEvents(clientInstance) {
   clientInstance.on('qr', (qr) => {
+    terminalPresenter.status('WHATSAPP QR REQUIRED', 'yellow', 'Pindai QR pada WhatsApp Perangkat tertaut.');
     console.log('\nPindai QR ini menggunakan WhatsApp FRIDAY:');
     qrcode.generate(qr, { small: true });
     console.log('\nBuka WhatsApp > Perangkat tertaut > Tautkan perangkat.');
   });
 
   clientInstance.on('authenticated', () => {
-    console.log('Autentikasi WhatsApp berhasil.');
+    terminalPresenter.status('WHATSAPP AUTHENTICATED', 'green');
+    return;
   });
 
   clientInstance.on('ready', () => {
@@ -406,6 +430,8 @@ function configureClientEvents(clientInstance) {
       return;
     }
     fridayReadyAt = Math.floor(Date.now() / 1000);
+    terminalPresenter.status('FRIDAY ONLINE', 'green', `WhatsApp connected · ${MODEL} · menunggu pesan`);
+    return;
 
     const c = terminal;
 
@@ -422,11 +448,13 @@ function configureClientEvents(clientInstance) {
   });
 
   clientInstance.on('auth_failure', (message) => {
-    console.error('Autentikasi gagal:', message);
+    terminalPresenter.status('WHATSAPP AUTHENTICATION FAILED', 'red', 'Periksa sesi autentikasi dan jalankan recovery yang terdokumentasi.');
+    return;
   });
 
   clientInstance.on('disconnected', (reason) => {
-    console.warn('WhatsApp terputus:', reason);
+    terminalPresenter.status('WHATSAPP DISCONNECTED', 'red', 'Koneksi terputus; tidak ada pesan otomatis yang dikirim ulang.');
+    return;
   });
 }
 
@@ -440,7 +468,7 @@ async function logRuntimeDiagnostics() {
     } else {
       const eventType = result.required ? 'error' : 'warn';
       logEvent(eventType, `${result.label} belum siap`, result.detail);
-      console.warn(`[Runtime] ${result.guidance}`);
+      terminalPresenter.status('RUNTIME GUIDANCE', eventType === 'error' ? 'red' : 'yellow', result.guidance);
     }
   }
 
@@ -530,24 +558,18 @@ const messageService = createMessageService({
   logger: {
     event: logEvent,
     stage: (stage, fields) => {
-      console.log(JSON.stringify({
-        timestamp: new Date().toISOString(),
-        component: 'conversation',
-        stage,
+      terminalPresenter.stage(stage, {
         correlationId: fields.correlationId,
         outcome: fields.outcome,
         ...(fields.category ? { category: fields.category } : {}),
         ...safeConversationLogMetadata(fields),
-      }));
+      });
     },
     error: (label, error) => {
-      console.error(JSON.stringify({
-        timestamp: new Date().toISOString(),
-        component: 'conversation',
-        stage: 'application_error',
+      terminalPresenter.stage('application_error', {
         outcome: 'failed',
         category: classifyConversationError(error, label),
-      }));
+      });
     },
   },
 });
@@ -564,15 +586,13 @@ function registerMessageHandler(clientInstance) {
     handle: (message, transport) => messageService.handle(message, transport),
     reply: (message) => whatsappAdapters.reply(message),
     logger: {
-      stage: (stage, fields) => console.log(JSON.stringify({
-        timestamp: new Date().toISOString(),
-        component: 'conversation',
-        stage,
+      incoming: (fields) => terminalPresenter.incoming(fields),
+      stage: (stage, fields) => terminalPresenter.stage(stage, {
         correlationId: fields.correlationId,
         outcome: fields.outcome,
         ...(fields.category ? { category: fields.category } : {}),
         ...safeConversationLogMetadata(fields),
-      })),
+      }),
       log: () => {},
       error: () => {},
     },

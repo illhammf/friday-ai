@@ -216,6 +216,13 @@ export function registerQueuedMessageHandler(
       correlationId,
       outcome: 'accepted',
     });
+    logger.incoming?.({
+      conversationType: typeof message.from === 'string' && message.from.endsWith('@g.us')
+        ? 'group'
+        : 'private',
+      messageType: typeof message.type === 'string' ? message.type : 'unknown',
+      preview: typeof message.body === 'string' ? message.body : '',
+    });
 
     queuedMessage.catch((error) => {
       logger.stage?.('queue_processing', {
