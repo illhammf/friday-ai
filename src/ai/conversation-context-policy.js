@@ -10,6 +10,8 @@ const GENERIC_CONTEXT_TERMS = new Set([
   'baru', 'saja', 'sedang', 'ingin', 'memahami', 'topik', 'sebutkan',
   'kembali', 'ceritakan', 'sebelumnya', 'minta', 'hal', 'tadi', 'pernah',
 ]);
+const TOPIC_SWITCH_PATTERN = /\b(?:sekarang|now|ganti|switch|pindah|beralih|bahas|membahas|discuss|let['’]?s\s+(?:discuss|talk)|let's)\b/i;
+const HISTORICAL_RECALL_PATTERN = /\b(?:sebelumnya|sebelum|tadi|barusan|yang\s+(?:aku|saya)\s+(?:bilang|ceritakan|minta)|apa\s+yang\s+(?:aku|saya)|previous(?:ly)?|earlier|before|what\s+did\s+i)\b/i;
 
 function messageText(message) {
   return (message?.parts || [])
@@ -21,6 +23,16 @@ function messageText(message) {
 export function isShortNonSubstantiveMessage(question) {
   const normalized = String(question || '').trim().toLocaleLowerCase('id-ID');
   return SHORT_NON_SUBSTANTIVE_MESSAGES.has(normalized);
+}
+
+export function isExplicitTopicSwitch(question) {
+  const text = String(question || '').trim();
+  if (/^(?:apa|siapa|bagaimana|what|who|how)\b/i.test(text)) return false;
+  return TOPIC_SWITCH_PATTERN.test(text);
+}
+
+export function isHistoricalRecallQuestion(question) {
+  return HISTORICAL_RECALL_PATTERN.test(String(question || ''));
 }
 
 /**
@@ -38,6 +50,15 @@ export function selectConversationContext(history, question, {
       recentCount: 0,
       relevantEarlierCount: 0,
       excludedEarlierCount: entries.length,
+    });
+  }
+  if (isExplicitTopicSwitch(question)) {
+    return Object.freeze({
+      history: Object.freeze([]),
+      recentCount: 0,
+      relevantEarlierCount: 0,
+      excludedEarlierCount: entries.length,
+      topicSwitch: true,
     });
   }
   const recent = entries.slice(-recentLimit);
@@ -60,10 +81,27 @@ export function selectConversationContext(history, question, {
     .sort((left, right) => left - right);
   const selectedEarlier = relevantIndexes.map((index) => earlier[index]);
 
+  const latestTopicSwitch = entries.reduce(
+    (latest, message, index) => message?.role === 'user' &&
+      isExplicitTopicSwitch(messageText(message)) ? index : latest,
+    -1,
+  );
+  if (latestTopicSwitch >= 0 && !isHistoricalRecallQuestion(question)) {
+    const activeTopicHistory = entries.slice(latestTopicSwitch);
+    return Object.freeze({
+      history: Object.freeze(activeTopicHistory.slice(-recentLimit)),
+      recentCount: Math.min(activeTopicHistory.length, recentLimit),
+      relevantEarlierCount: 0,
+      excludedEarlierCount: entries.length - Math.min(activeTopicHistory.length, recentLimit),
+      topicSwitch: true,
+    });
+  }
+
   return Object.freeze({
     history: Object.freeze([...selectedEarlier, ...recent]),
     recentCount: recent.length,
     relevantEarlierCount: selectedEarlier.length,
     excludedEarlierCount: earlier.length - selectedEarlier.length,
+    topicSwitch: false,
   });
 }

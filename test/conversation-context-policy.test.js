@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  isExplicitTopicSwitch,
   isShortNonSubstantiveMessage,
   selectConversationContext,
 } from '../src/ai/conversation-context-policy.js';
@@ -91,4 +92,47 @@ test('generic recall wording does not select an old exchange by generic overlap 
     entry('model', 'Dart dan variabel.'),
   ]);
   assert.equal(selected.relevantEarlierCount, 0);
+});
+
+test('explicit topic switch starts a clean active-topic context', () => {
+  assert.equal(isExplicitTopicSwitch('Sekarang kita bahas Java, aku belajar Inheritance'), true);
+  const selected = selectConversationContext([
+    entry('user', 'Aku sedang belajar Dart variables.'),
+    entry('model', 'Penjelasan Dart.'),
+    entry('user', 'Siapa nama dosen yang tadi aku berikan?'),
+    entry('model', 'Informasi dosen belum tersedia.'),
+  ], 'Sekarang kita bahas Java, aku sedang belajar Inheritance.');
+  assert.deepEqual(selected.history, []);
+  assert.equal(selected.topicSwitch, true);
+  const request = buildConversationContents({
+    systemInstruction: 'grounding',
+    question: 'Sekarang kita bahas Java, aku sedang belajar Inheritance.',
+    history: selected.history,
+  });
+  assert.deepEqual(request.contents.map(({ parts }) => parts[0].text), [
+    'Sekarang kita bahas Java, aku sedang belajar Inheritance.',
+  ]);
+});
+
+test('after a switch, active-topic questions keep Java context but not old Dart context', () => {
+  const selected = selectConversationContext([
+    entry('user', 'Aku sedang belajar Dart variables.'),
+    entry('model', 'Penjelasan Dart.'),
+    entry('user', 'Sekarang kita bahas Java, aku sedang belajar Inheritance.'),
+    entry('model', 'Inheritance adalah pewarisan class di Java.'),
+  ], 'Apa topik yang sedang kita bahas sekarang?');
+  assert.deepEqual(selected.history, [
+    entry('user', 'Sekarang kita bahas Java, aku sedang belajar Inheritance.'),
+    entry('model', 'Inheritance adalah pewarisan class di Java.'),
+  ]);
+});
+
+test('explicit historical recall can still retrieve the pre-switch topic', () => {
+  const selected = selectConversationContext([
+    entry('user', 'Aku sedang belajar Dart variables.'),
+    entry('model', 'Penjelasan Dart.'),
+    entry('user', 'Sekarang kita bahas Java Inheritance.'),
+    entry('model', 'Baik, kita bahas Java.'),
+  ], 'Apa yang aku pelajari sebelum Java?');
+  assert.match(JSON.stringify(selected.history), /Dart/);
 });
