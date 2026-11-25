@@ -147,6 +147,7 @@ test('classifies identity, open-topic, recent-recall, and stretched short messag
   assert.equal(isShortNonSubstantiveMessage('Hehe'), true);
   assert.equal(isIdentityQuestion('Loh aku belum tanya, kamu siapa sih?'), true);
   assert.equal(isIdentityQuestion('Akuu mau bahas emm.., kamu aja deh hahaha'), true);
+  assert.equal(isIdentityQuestion('Friday masih ingat aku?'), true);
   assert.equal(isOpenTopicQuestion('Coba sekarang kita bahas apa'), true);
   assert.equal(isRecentHistoryQuestion('Tadi barusan kita bahas apa sih'), true);
 });

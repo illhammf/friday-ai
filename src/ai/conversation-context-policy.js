@@ -31,7 +31,7 @@ export function isShortNonSubstantiveMessage(question) {
 
 export function isIdentityQuestion(question) {
   const text = String(question || '').trim();
-  return /(?:\b(?:siapa|who)\s+(?:kamu|dirimu|you)\b|\b(?:kamu|you)\s+(?:siapa|who)\b|\bperkenalkan(?:\s+dirimu)?\b|\btentang\s+(?:kamu|dirimu|friday)\b|\bbahas\s+(?:kamu|dirimu|friday)\b|\b(?:kamu|dirimu)\s+aja\b)/i.test(text);
+  return /(?:\b(?:siapa|who)\s+(?:kamu|dirimu|you)\b|\b(?:kamu|you)\s+(?:siapa|who)\b|\bperkenalkan(?:\s+dirimu)?\b|\btentang\s+(?:kamu|dirimu|friday)\b|\bbahas\s+(?:kamu|dirimu|friday)\b|\b(?:kamu|dirimu)\s+aja\b|\b(?:masih\s+)?ingat\s+(?:aku|saya|me)\b|\bremember\s+me\b)/i.test(text);
 }
 
 export function isRecentHistoryQuestion(question) {

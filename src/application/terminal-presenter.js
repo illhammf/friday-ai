@@ -86,6 +86,7 @@ export function createTerminalPresenter({
       Number.isFinite(fields.durationMs) ? `${fields.durationMs}ms` : '',
       Number.isFinite(fields.totalTokens) ? `${fields.totalTokens} tokens` : '',
       fields.category ? fields.category : '',
+      fields.identityStatus ? `identity ${fields.identityStatus}` : '',
       Number.isInteger(fields.httpStatus) ? `HTTP ${fields.httpStatus}` : '',
     ].filter(Boolean).join(' · ');
     write(`${timestamp()} ${paint('●', tone)} ${paint(outcome, tone)}${details ? ` ${paint(`— ${details}`, 'gray')}` : ''}`,

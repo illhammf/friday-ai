@@ -571,6 +571,41 @@ test('keeps memory commands private and scopes them to the sender private sessio
   assert.equal(memories.has('private:member-1@c.us'), false);
 });
 
+test('denies personal memory commands when the injected sender identity is unavailable', async () => {
+  let handled = false;
+  const { calls, service } = createHarness({
+    identity: {
+      verify: async () => ({ status: 'unavailable' }),
+    },
+    memory: {
+      handleCommand: async () => {
+        handled = true;
+        return 'should not be reached';
+      },
+    },
+  });
+  await service.handle(createMessage({ text: 'ingat ya aku suka teh' }), createMessenger(calls));
+  assert.equal(handled, false);
+  assert.match(calls.find(([type]) => type === 'reply')[1], /belum bisa digunakan/);
+});
+
+test('verified principal owns the memory scope used by explicit commands', async () => {
+  let memorySession;
+  const { calls, service } = createHarness({
+    identity: {
+      verify: async () => ({ status: 'verified', principalId: 'principal:gunawan' }),
+    },
+    memory: {
+      handleCommand: async (_text, sessionId) => {
+        memorySession = sessionId;
+        return 'memory saved';
+      },
+    },
+  });
+  await service.handle(createMessage({ text: 'ingat ya aku suka teh' }), createMessenger(calls));
+  assert.equal(memorySession, 'private:principal:gunawan');
+});
+
 test('downloads social videos only when the text explicitly asks for a download', async () => {
   const { calls, service } = createHarness();
   const url = 'https://www.tiktok.com/@user/video/123';

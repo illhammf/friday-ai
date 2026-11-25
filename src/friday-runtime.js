@@ -70,6 +70,10 @@ import {
 } from './ai/conversation-context-policy.js';
 import { createMessageService } from './application/message-service.js';
 import { createTerminalPresenter } from './application/terminal-presenter.js';
+import {
+  canUsePersonalMemory,
+  createSenderIdentityVerifier,
+} from './application/sender-identity.js';
 import { createCommandRouter } from './application/command-router.js';
 import { createApplication } from './application/application-lifecycle.js';
 import {
@@ -102,6 +106,7 @@ const MODELS = getModelChain(
   process.env.GEMINI_FALLBACK_MODEL,
 );
 const terminalPresenter = createTerminalPresenter();
+const senderIdentityVerifier = createSenderIdentityVerifier();
 
 const sleep = (ms) =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -284,7 +289,7 @@ function safeConversationLogMetadata(fields) {
       .map((key) => [key, fields[key]]),
   );
   const metadata = { ...numeric };
-  for (const key of ['providerId', 'modelId', 'nextModelId', 'errorName', 'providerErrorCode']) {
+  for (const key of ['providerId', 'modelId', 'nextModelId', 'errorName', 'providerErrorCode', 'identityStatus']) {
     const value = fields[key];
     if (
       typeof value === 'string' &&
@@ -308,8 +313,10 @@ function safeConversationLogMetadata(fields) {
   async function askFriday({
     question,
     privateSession,
+    personalMemorySession = privateSession,
     sharedGroupSession = null,
     senderName = 'Pengguna',
+    senderIdentity = null,
     image,
     logStage,
   }, database, memoryService) {
@@ -348,12 +355,13 @@ function safeConversationLogMetadata(fields) {
         operation: `recent=${historySelection.recentCount}; relevantEarlier=${historySelection.relevantEarlierCount}; excludedEarlier=${historySelection.excludedEarlierCount}`,
       });
     }
-    const userMemories = isGroup || isShortNonSubstantiveMessage(question)
+    const userMemories = isGroup || !canUsePersonalMemory(senderIdentity)
+      || isShortNonSubstantiveMessage(question)
       || isIdentityQuestion(question)
       || isConversationCorrection(question)
       || historySelection.intent === 'recent_recall'
       ? []
-      : memoryService.retrieve(privateSession, question);
+      : memoryService.retrieve(personalMemorySession, question);
 
     const conversationStyle = detectConversationStyle(question, history);
     const dynamicStyle = getStyleInstruction(conversationStyle);
@@ -364,6 +372,9 @@ function safeConversationLogMetadata(fields) {
     const config = {
       systemInstruction: [
         systemInstruction,
+        isGroup
+          ? 'Ini adalah percakapan grup bersama. Jangan menganggap pernyataan atau memori pribadi peserta lain sebagai milik pengirim saat ini. Gunakan pesan grup hanya sebagai fakta diskusi bersama yang benar-benar tersedia.'
+          : '',
         getConversationIntentInstruction(historySelection.intent),
         dynamicStyle,
         getMemoryInstruction(userMemories),
@@ -494,6 +505,7 @@ async function logRuntimeDiagnostics() {
 
 
 const messageService = createMessageService({
+  identity: senderIdentityVerifier,
   botName: BOT_NAME,
   getReadyAt: () => fridayReadyAt,
   sessions: {
@@ -573,6 +585,7 @@ const messageService = createMessageService({
         correlationId: fields.correlationId,
         outcome: fields.outcome,
         ...(fields.category ? { category: fields.category } : {}),
+        ...(fields.identityStatus ? { identityStatus: fields.identityStatus } : {}),
         ...safeConversationLogMetadata(fields),
       });
     },

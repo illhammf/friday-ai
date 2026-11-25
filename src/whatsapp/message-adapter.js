@@ -35,8 +35,11 @@ export function normalizeWhatsAppMessage(message, downloadMedia) {
   return {
     messageId,
     chatId: message.from,
+    // A missing group author is unavailable evidence, never the group ID.
     senderId: isGroup
-      ? (message.author || message.from)
+      ? (typeof message.author === 'string' && message.author.trim()
+        ? message.author
+        : null)
       : message.from,
     chatType: isGroup ? 'group' : 'private',
     messageType: typeof message.type === 'string' ? message.type : 'unknown',

@@ -40,6 +40,7 @@ import {
  * @property {(text: string) => string} formatMessage
  * @property {{sendVideo: Function, sendSticker: Function, sendImage: Function, sendVoice: Function}} deliver
  * @property {{event?: Function, error?: Function}} logger
+ * @property {{verify: (message: Object) => Promise<Object>}} [identity]
  */
 
 /**
@@ -105,6 +106,10 @@ export function createMessageService(dependencies) {
         ...(typeof metadata.retryable === 'boolean' ? { retryable: metadata.retryable } : {}),
         ...(typeof metadata.handlerExecutionStarted === 'boolean'
           ? { handlerExecutionStarted: metadata.handlerExecutionStarted }
+          : {}),
+        ...(typeof metadata.identityStatus === 'string' &&
+          ['verified', 'unavailable', 'invalid', 'ambiguous'].includes(metadata.identityStatus)
+          ? { identityStatus: metadata.identityStatus }
           : {}),
       });
     };
@@ -265,13 +270,26 @@ export function createMessageService(dependencies) {
       }
 
       const senderId = message.senderId;
-      const privateSession = dependencies.sessions.privateSessionId(senderId);
+      const privateSession = isGroup
+        ? null
+        : dependencies.sessions.privateSessionId(senderId);
       const sharedGroupSession = isGroup
         ? dependencies.sessions.groupSessionId(message.chatId)
         : null;
       const senderName = isGroup
         ? (message.group?.senderName || 'Anggota grup')
         : 'Pengguna';
+      const senderIdentity = dependencies.identity?.verify
+        ? await dependencies.identity.verify(message)
+        : null;
+      if (dependencies.identity?.verify) {
+        emitStage('identity_resolution', senderIdentity?.status || 'unavailable', undefined, {
+          identityStatus: senderIdentity?.status || 'unavailable',
+        });
+      }
+      const personalMemorySession = senderIdentity?.status === 'verified'
+        ? dependencies.sessions.privateSessionId(senderIdentity.principalId)
+        : privateSession;
       const memoryCommand = dependencies.memory.parseCommand(question);
 
       if (memoryCommand && !isImage && !isVoiceNote) {
@@ -281,11 +299,17 @@ export function createMessageService(dependencies) {
           );
           return;
         }
+        if (dependencies.identity?.verify && senderIdentity?.status !== 'verified') {
+          await submitReply(
+            'Memori pribadi belum bisa digunakan karena identitas pengirim belum dapat diverifikasi dengan aman.',
+          );
+          return;
+        }
 
         try {
           const reply = await dependencies.memory.handleCommand(
             question,
-            privateSession,
+            personalMemorySession,
           );
 
           if (reply) {
@@ -551,8 +575,10 @@ export function createMessageService(dependencies) {
           answer = await dependencies.assistant.ask({
           question,
           privateSession,
+          personalMemorySession,
           sharedGroupSession,
           senderName,
+          senderIdentity,
           image,
           correlationId,
           logStage: emitStage,
