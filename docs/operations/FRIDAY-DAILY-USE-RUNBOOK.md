@@ -150,6 +150,31 @@ Do not publish complete logs without reviewing/redacting them. In particular, QR
 
 The database contains private conversation history and memories. Keep backups encrypted or in access-controlled local storage. Prefer a backup only after Friday has stopped and SQLite has closed. Copy `data/friday.sqlite` to an access-controlled destination; never include it in an issue, chat, or source repository. To restore, stop Friday first, preserve the current database as a separate backup, then restore the chosen copy. Do not inspect, edit, or delete database rows as routine troubleshooting.
 
+### Deliberate conversation-data reset
+
+To clear only Friday's persisted conversation history and explicit memories,
+stop Friday first, then run:
+
+```bash
+npm run reset:conversation-data
+```
+
+The command prints the resolved database path, affected table names and row
+counts, and protected migration tables. It changes nothing until the operator
+enters exactly:
+
+```text
+RESET ALL FRIDAY CONVERSATION DATA
+```
+
+Before deletion it creates a timestamped SQLite snapshot under `data/backups/`
+with restrictive local permissions. It deletes rows only from `messages` and
+`user_memories` inside a transaction; migration metadata, `.wwebjs_auth/`,
+configuration, and dependencies remain untouched. If confirmation is wrong, the
+command exits without changes. Treat the backup as private recovery data; if
+permanent deletion is later required, stop Friday and remove that specific
+backup deliberately after checking its path.
+
 ## Security precautions
 
 - Keep `.env`, WhatsApp auth/cache data, SQLite files, QR codes, and raw logs private.

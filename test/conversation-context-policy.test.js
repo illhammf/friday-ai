@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { selectConversationContext } from '../src/ai/conversation-context-policy.js';
+import {
+  isShortNonSubstantiveMessage,
+  selectConversationContext,
+} from '../src/ai/conversation-context-policy.js';
 import { buildConversationContents } from '../src/ai/conversation-context.js';
 
 const entry = (role, text) => ({ role, parts: [{ text }] });
@@ -58,4 +61,34 @@ test('does not select unrelated earlier entries when the recent window is suffic
   ], 'Apa yang aku pelajari?');
   assert.equal(selected.relevantEarlierCount, 0);
   assert.equal(selected.excludedEarlierCount, 0);
+});
+
+test('short acknowledgments do not inherit old context or retrieved-memory cues', () => {
+  assert.equal(isShortNonSubstantiveMessage('Tes'), true);
+  assert.equal(isShortNonSubstantiveMessage('Halo'), true);
+  assert.equal(isShortNonSubstantiveMessage('Tolong jelaskan Dart'), false);
+  const selected = selectConversationContext([
+    entry('user', 'Aku sedang belajar Dart.'),
+    entry('model', 'Penjelasan lama.'),
+  ], 'Tes');
+  assert.deepEqual(selected.history, []);
+  assert.equal(selected.excludedEarlierCount, 2);
+});
+
+test('generic recall wording does not select an old exchange by generic overlap alone', () => {
+  const selected = selectConversationContext([
+    entry('user', 'Aku sedang meminta bantuan umum.'),
+    entry('model', 'Baik, aku bantu.'),
+    entry('user', 'Percakapan lama yang tidak terkait.'),
+    entry('model', 'Baik.'),
+    entry('user', 'Aku belajar Dart dan variabel.'),
+    entry('model', 'Dart dan variabel.'),
+  ], 'Sebutkan kembali dua hal yang aku ceritakan sebelumnya.');
+  assert.deepEqual(selected.history, [
+    entry('user', 'Percakapan lama yang tidak terkait.'),
+    entry('model', 'Baik.'),
+    entry('user', 'Aku belajar Dart dan variabel.'),
+    entry('model', 'Dart dan variabel.'),
+  ]);
+  assert.equal(selected.relevantEarlierCount, 0);
 });

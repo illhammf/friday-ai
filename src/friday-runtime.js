@@ -61,7 +61,10 @@ import {
   normalizeConversationHistory,
   readAssistantResponse,
 } from './ai/conversation-context.js';
-import { selectConversationContext } from './ai/conversation-context-policy.js';
+import {
+  isShortNonSubstantiveMessage,
+  selectConversationContext,
+} from './ai/conversation-context-policy.js';
 import { createMessageService } from './application/message-service.js';
 import { createTerminalPresenter } from './application/terminal-presenter.js';
 import { createCommandRouter } from './application/command-router.js';
@@ -342,7 +345,7 @@ function safeConversationLogMetadata(fields) {
         operation: `recent=${historySelection.recentCount}; relevantEarlier=${historySelection.relevantEarlierCount}; excludedEarlier=${historySelection.excludedEarlierCount}`,
       });
     }
-    const userMemories = isGroup
+    const userMemories = isGroup || isShortNonSubstantiveMessage(question)
       ? []
       : memoryService.retrieve(privateSession, question);
 
