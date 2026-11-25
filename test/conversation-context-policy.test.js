@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  isConversationCorrection,
   isExplicitTopicSwitch,
   isIdentityQuestion,
+  isPreviousTopicRecallQuestion,
   isOpenTopicQuestion,
   isRecentHistoryQuestion,
   isShortNonSubstantiveMessage,
@@ -168,4 +170,31 @@ test('recent-history wording keeps recent exchanges even without topic keywords'
     entry('model', 'SQA adalah Software Quality Assurance.'),
   ]);
   assert.equal(selected.intent, 'recent_recall');
+});
+
+test('previous-topic recall selects the proposal immediately before the Java switch', () => {
+  const selected = selectConversationContext([
+    entry('user', 'Topik lama SQA.'),
+    entry('model', 'Penjelasan SQA lama.'),
+    entry('user', 'Kita bahas Python yu, kebetulan dosen ku Pak Rahmat.'),
+    entry('model', 'Boleh, kita bahas Python dan Pak Rahmat.'),
+    entry('user', 'Atau pindah deh Java aja hehw.'),
+    entry('model', 'Gas, pindah ke Java.'),
+  ], 'Sebelum pindah ke Java tadi aku mau bahas apa?');
+  assert.equal(isPreviousTopicRecallQuestion('Sebelum pindah ke Java tadi aku mau bahas apa?'), true);
+  assert.deepEqual(selected.history, [
+    entry('user', 'Kita bahas Python yu, kebetulan dosen ku Pak Rahmat.'),
+    entry('model', 'Boleh, kita bahas Python dan Pak Rahmat.'),
+  ]);
+  assert.equal(selected.intent, 'previous_topic_recall');
+});
+
+test('conversation correction clears old topic and uses a correction intent', () => {
+  assert.equal(isConversationCorrection('Kok halo nya masih ikut sih, harusnya gausa'), true);
+  const selected = selectConversationContext([
+    entry('user', 'Atau pindah deh Java aja.'),
+    entry('model', 'Baik, Java.'),
+  ], 'Kok halo nya masih ikut sih, harusnya gausa');
+  assert.deepEqual(selected.history, []);
+  assert.equal(selected.intent, 'correction');
 });

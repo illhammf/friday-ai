@@ -38,6 +38,14 @@ export function isRecentHistoryQuestion(question) {
   return /\b(?:tadi|barusan|baru\s+saja|apa\s+yang\s+(?:kita|aku|saya)\s+(?:bahas|bicarakan)|what\s+did\s+we\s+(?:just\s+)?(?:discuss|talk\s+about)|what\s+were\s+we\s+talking)\b/i.test(String(question || ''));
 }
 
+export function isPreviousTopicRecallQuestion(question) {
+  return /\b(?:sebelum|before)\b.{0,80}\b(?:pindah|ganti|switch|java|topic|topik)\b/i.test(String(question || ''));
+}
+
+export function isConversationCorrection(question) {
+  return /\b(?:kok|kenapa|harusnya|seharusnya|jangan|gausah|gak\s+usah|nggak\s+usah|tidak\s+usah|masih\s+ikut|salah)\b/i.test(String(question || ''));
+}
+
 export function isOpenTopicQuestion(question) {
   return /^coba(?:\s+deh)?\s+sekarang\s+kita\s+bahas\s+apa\b/i.test(String(question || '').trim());
 }
@@ -81,6 +89,15 @@ export function selectConversationContext(history, question, {
       intent: 'identity',
     });
   }
+  if (isConversationCorrection(question)) {
+    return Object.freeze({
+      history: Object.freeze([]),
+      recentCount: 0,
+      relevantEarlierCount: 0,
+      excludedEarlierCount: entries.length,
+      intent: 'correction',
+    });
+  }
   if (isOpenTopicQuestion(question)) {
     return Object.freeze({
       history: Object.freeze([]),
@@ -100,7 +117,7 @@ export function selectConversationContext(history, question, {
       intent: 'topic_switch',
     });
   }
-  if (isRecentHistoryQuestion(question)) {
+  if (isRecentHistoryQuestion(question) && !isPreviousTopicRecallQuestion(question)) {
     return Object.freeze({
       history: Object.freeze(entries.slice(-RECENT_RECALL_MESSAGES)),
       recentCount: Math.min(entries.length, RECENT_RECALL_MESSAGES),
@@ -134,6 +151,24 @@ export function selectConversationContext(history, question, {
       isExplicitTopicSwitch(messageText(message)) ? index : latest,
     -1,
   );
+  if (latestTopicSwitch >= 0 && isPreviousTopicRecallQuestion(question)) {
+    const beforeSwitch = entries.slice(0, latestTopicSwitch);
+    const lastUserBeforeSwitch = beforeSwitch.reduce(
+      (latest, message, index) => message?.role === 'user' ? index : latest,
+      -1,
+    );
+    const proposedTopicHistory = lastUserBeforeSwitch >= 0
+      ? beforeSwitch.slice(lastUserBeforeSwitch)
+      : beforeSwitch.slice(-recentLimit);
+    return Object.freeze({
+      history: Object.freeze(proposedTopicHistory.slice(-recentLimit)),
+      recentCount: Math.min(proposedTopicHistory.length, recentLimit),
+      relevantEarlierCount: 0,
+      excludedEarlierCount: entries.length - Math.min(proposedTopicHistory.length, recentLimit),
+      topicSwitch: false,
+      intent: 'previous_topic_recall',
+    });
+  }
   if (latestTopicSwitch >= 0 && !isHistoricalRecallQuestion(question)) {
     const activeTopicHistory = entries.slice(latestTopicSwitch);
     return Object.freeze({
@@ -164,6 +199,8 @@ export function getConversationIntentInstruction(intent) {
     topic_switch: 'Pesan terbaru menetapkan topik baru. Fokuskan jawaban pada topik baru dan jangan membawa topik lama kecuali diminta.',
     recent_recall: 'Pengguna meminta ringkasan percakapan terbaru. Gunakan pesan terbaru yang benar-benar tersedia; jangan menyebut sesi kosong jika konteks tersedia.',
     active_topic: 'Jawab berdasarkan topik aktif terbaru. Jangan merangkum seluruh riwayat atau mengulang pertanyaan lama yang tidak relevan.',
+    previous_topic_recall: 'Pengguna menanyakan topik yang diajukan sebelum perpindahan topik. Gunakan pertukaran tepat sebelum switch; bedakan topik yang baru diusulkan dari materi yang benar-benar sudah dibahas.',
+    correction: 'Pengguna sedang mengoreksi respons atau gaya FRIDAY. Akui singkat, minta maaf bila sesuai, dan terapkan koreksi tanpa mengulang sapaan atau topik lama.',
     conversation: 'Jawab pesan terbaru dengan konteks percakapan yang relevan saja.',
   };
   return instructions[intent] || instructions.conversation;

@@ -64,6 +64,7 @@ import {
 import {
   getConversationIntentInstruction,
   isIdentityQuestion,
+  isConversationCorrection,
   isShortNonSubstantiveMessage,
   selectConversationContext,
 } from './ai/conversation-context-policy.js';
@@ -349,6 +350,7 @@ function safeConversationLogMetadata(fields) {
     }
     const userMemories = isGroup || isShortNonSubstantiveMessage(question)
       || isIdentityQuestion(question)
+      || isConversationCorrection(question)
       || historySelection.intent === 'recent_recall'
       ? []
       : memoryService.retrieve(privateSession, question);
