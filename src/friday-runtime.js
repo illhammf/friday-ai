@@ -83,6 +83,8 @@ import {
   getSafeProviderErrorMetadata,
 } from './application/conversation-observability.js';
 import { createRuntimeReadinessGate } from './application/runtime-readiness.js';
+import { createRuntimeClock } from './application/runtime-clock.js';
+import { createTemporalService, runtimeTemporalInstruction } from './application/temporal-service.js';
 import {
   generateWithModelFallback,
   getModelChain,
@@ -109,6 +111,8 @@ const MODELS = getModelChain(
 );
 const terminalPresenter = createTerminalPresenter();
 const senderIdentityVerifier = createSenderIdentityVerifier();
+const runtimeClock = createRuntimeClock();
+const temporalService = createTemporalService({ clock: runtimeClock });
 
 const sleep = (ms) =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -376,6 +380,7 @@ function safeConversationLogMetadata(fields) {
     const config = {
       systemInstruction: [
         systemInstruction,
+        runtimeTemporalInstruction(runtimeClock),
         isGroup
           ? (useSharedGroupContext
             ? 'Ini adalah permintaan ringkasan diskusi grup. Sumber: CURRENT_MESSAGE + SHARED_GROUP_CONTEXT. Gunakan hanya shared group context yang tersedia dan jangan menganggap pernyataan peserta lain sebagai fakta pribadi pengirim saat ini.'
@@ -512,6 +517,7 @@ async function logRuntimeDiagnostics() {
 
 const messageService = createMessageService({
   identity: senderIdentityVerifier,
+  temporal: temporalService,
   botName: BOT_NAME,
   getReadyAt: () => fridayReadyAt,
   sessions: {

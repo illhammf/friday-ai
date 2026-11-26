@@ -29,6 +29,7 @@ import {
  * @property {() => number} getReadyAt
  * @property {{privateSessionId: (senderId: string) => string, groupSessionId: (chatId: string) => string, groupSenderSessionId?: (chatId: string, senderId: string) => string|null}} sessions
  * @property {{parseCommand: Function, handleCommand: Function}} memory
+ * @property {{answer: (text: string) => string|null}} [temporal]
  * @property {{route: (text: string) => {handled: boolean, response?: string}}} [commands]
  * @property {{getUrls: Function, isDownloadRequest: Function, download: Function, getFailureMessage: Function}} video
  * @property {{isRequest: Function, parseOptions: Function, create: Function, getFailureMessage: Function}} sticker
@@ -252,6 +253,18 @@ export function createMessageService(dependencies) {
           } catch (error) {
             // Sending may have succeeded remotely despite a transport rejection.
             // Avoid a second reply after that uncertain side effect.
+          }
+          return;
+        }
+      }
+
+      if (dependencies.temporal?.answer) {
+        const temporalAnswer = dependencies.temporal.answer(question);
+        if (temporalAnswer) {
+          try {
+            await submitReply(temporalAnswer);
+          } catch {
+            // The transport stage already records an uncertain outcome.
           }
           return;
         }

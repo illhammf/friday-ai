@@ -159,6 +159,18 @@ test('routes a private chat to AI with the private session and replies with form
   ]);
 });
 
+test('deterministic temporal answers bypass the assistant and history', async () => {
+  const { calls, service } = createHarness({
+    temporal: { answer: () => 'Hari ini hari Kamis, 26 November 2026.' },
+  });
+  await service.handle(createMessage({ text: 'hari apa sekarang' }), createMessenger(calls));
+  assert.deepEqual(calls.filter(([type]) => type === 'reply'), [
+    ['reply', 'Hari ini hari Kamis, 26 November 2026.'],
+  ]);
+  assert.equal(calls.some(([type]) => type === 'ask'), false);
+  assert.equal(calls.some(([type]) => type === 'save'), false);
+});
+
 test('emits correlated safe stage fields without logging message or answer content', async () => {
   const stages = [];
   const { calls, service } = createHarness({
