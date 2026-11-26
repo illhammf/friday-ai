@@ -21,3 +21,48 @@ node_modules/
 logs/
 *.log
 npm-debug.log*
+# ==========================================
+# Friday AI - Secrets & Local Credentials
+# ==========================================
+
+.env
+.env.*
+!.env.example
+
+.github-token
+.github-user
+
+# ==========================================
+# WhatsApp Authentication
+# ==========================================
+
+.wwebjs_auth/
+.wwebjs_cache/
+
+# ==========================================
+# Local Database & Backups
+# ==========================================
+
+data/*.sqlite
+data/*.sqlite-*
+data/*.db
+data/*.db-*
+data/backups/
+
+# ==========================================
+# Logs & Runtime Files
+# ==========================================
+
+*.log
+logs/
+tmp/
+temp/
+
+# ==========================================
+# Local Development
+# ==========================================
+
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
