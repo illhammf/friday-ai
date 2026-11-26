@@ -38,6 +38,11 @@ export function isRecentHistoryQuestion(question) {
   return /\b(?:tadi|barusan|baru\s+saja|apa\s+yang\s+(?:kita|aku|saya)\s+(?:bahas|bicarakan)|what\s+did\s+we\s+(?:just\s+)?(?:discuss|talk\s+about)|what\s+were\s+we\s+talking)\b/i.test(String(question || ''));
 }
 
+export function isSharedGroupRecallQuestion(question) {
+  const text = String(question || '');
+  return /\b(?:grup|group)\b/i.test(text) && isRecentHistoryQuestion(text);
+}
+
 export function isPreviousTopicRecallQuestion(question) {
   return /\b(?:sebelum|before)\b.{0,80}\b(?:pindah|ganti|switch|java|topic|topik)\b/i.test(String(question || ''));
 }

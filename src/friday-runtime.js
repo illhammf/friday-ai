@@ -9,6 +9,7 @@ import { transcribeVoiceNote } from './audio/transcribe-voice-note.js';
 import {
   privateSessionId,
   groupSessionId,
+  groupSenderSessionId,
   initializeDefaultDatabase,
 } from './database/history.js';
 import { detectConversationStyle, getStyleInstruction } from './ai/conversation-style.js';
@@ -66,6 +67,7 @@ import {
   isIdentityQuestion,
   isConversationCorrection,
   isShortNonSubstantiveMessage,
+  isSharedGroupRecallQuestion,
   selectConversationContext,
 } from './ai/conversation-context-policy.js';
 import { createMessageService } from './application/message-service.js';
@@ -315,6 +317,7 @@ function safeConversationLogMetadata(fields) {
     privateSession,
     personalMemorySession = privateSession,
     sharedGroupSession = null,
+    senderGroupSession = null,
     senderName = 'Pengguna',
     senderIdentity = null,
     image,
@@ -325,8 +328,9 @@ function safeConversationLogMetadata(fields) {
 
     // Ambil riwayat hanya dari sesi yang sedang digunakan.
     // Grup tidak boleh membaca riwayat percakapan pribadi.
+    const useSharedGroupContext = isGroup && isSharedGroupRecallQuestion(question);
     const activeSession = isGroup
-      ? sharedGroupSession
+      ? (useSharedGroupContext ? sharedGroupSession : (senderGroupSession || sharedGroupSession))
       : privateSession;
 
     const rawHistory = database.loadHistory(activeSession, 10);
@@ -373,7 +377,9 @@ function safeConversationLogMetadata(fields) {
       systemInstruction: [
         systemInstruction,
         isGroup
-          ? 'Ini adalah percakapan grup bersama. Jangan menganggap pernyataan atau memori pribadi peserta lain sebagai milik pengirim saat ini. Gunakan pesan grup hanya sebagai fakta diskusi bersama yang benar-benar tersedia.'
+          ? (useSharedGroupContext
+            ? 'Ini adalah permintaan ringkasan diskusi grup. Sumber: CURRENT_MESSAGE + SHARED_GROUP_CONTEXT. Gunakan hanya shared group context yang tersedia dan jangan menganggap pernyataan peserta lain sebagai fakta pribadi pengirim saat ini.'
+            : 'Ini adalah percakapan grup. Sumber: CURRENT_MESSAGE + CURRENT_SENDER_GROUP_HISTORY bila tersedia. Jangan menganggap pernyataan atau memori peserta lain sebagai milik pengirim saat ini. SHARED_GROUP_CONTEXT hanya boleh dipakai bila diminta secara eksplisit.')
           : '',
         getConversationIntentInstruction(historySelection.intent),
         dynamicStyle,
@@ -511,6 +517,7 @@ const messageService = createMessageService({
   sessions: {
     privateSessionId,
     groupSessionId,
+    groupSenderSessionId,
   },
   memory: {
     parseCommand: parseMemoryCommand,

@@ -8,6 +8,7 @@ export {
   clearUserMemories,
   privateSessionId,
   groupSessionId,
+  groupSenderSessionId,
   initializeDefaultDatabase,
   closeDatabase,
 } from './sqlite.js';

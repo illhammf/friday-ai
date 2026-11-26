@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { databaseMigrations } from './migrations/index.js';
 import { runMigrations } from './migration-runner.js';
+import { createGroupSenderScope } from '../application/conversation-scope.js';
 
 let defaultDatabase;
 
@@ -257,6 +258,10 @@ export function privateSessionId(userId) {
 
 export function groupSessionId(groupId) {
   return `group:${groupId}`;
+}
+
+export function groupSenderSessionId(groupId, senderEvidence) {
+  return createGroupSenderScope(groupId, senderEvidence);
 }
 
 export function closeDatabase() {

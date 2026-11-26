@@ -478,6 +478,51 @@ test('stores group turns only in the shared group conversation session', async (
   ]);
 });
 
+test('stores group turns in sender scope and shared scope without mixing participants', async () => {
+  const { calls, service } = createHarness({
+    sessions: {
+      groupSenderSessionId: (groupId, senderId) => `group-sender:${groupId}:${senderId}`,
+    },
+  });
+  const message = createMessage({
+    messageId: 'group-message-1',
+    chatId: 'group-1@g.us',
+    senderId: 'gunawan@c.us',
+    chatType: 'group',
+    text: 'Friday, aku sedang belajar Java.',
+    group: { senderName: 'Gunawan' },
+  });
+
+  await service.handle(message, createMessenger(calls));
+
+  const saves = calls.filter(([type]) => type === 'save');
+  assert.ok(saves.some(([, session]) => session === 'group-sender:group-1@g.us:gunawan@c.us'));
+  assert.ok(saves.some(([, session]) => session === 'group:group-1@g.us'));
+  assert.equal(saves.filter(([, , role]) => role === 'user').length, 2);
+});
+
+test('missing group sender evidence uses shared context only', async () => {
+  const { calls, service } = createHarness({
+    sessions: {
+      groupSenderSessionId: () => null,
+    },
+  });
+  const message = createMessage({
+    messageId: 'group-message-2',
+    chatId: 'group-1@g.us',
+    senderId: null,
+    chatType: 'group',
+    text: 'Friday, rangkum diskusi grup kita.',
+    group: { senderName: 'Anggota grup' },
+  });
+
+  await service.handle(message, createMessenger(calls));
+
+  const ask = calls.find(([type]) => type === 'ask')?.[1];
+  assert.equal(ask.senderGroupSession, null);
+  assert.equal(ask.sharedGroupSession, 'group:group-1@g.us');
+});
+
 test('keeps a group request from blocking the same sender private conversation', async () => {
   let releaseGroupAnswer;
   const groupAnswer = new Promise((resolve) => { releaseGroupAnswer = resolve; });

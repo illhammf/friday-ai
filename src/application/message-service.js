@@ -27,7 +27,7 @@ import {
  * @typedef {Object} MessageServiceDependencies
  * @property {string} botName
  * @property {() => number} getReadyAt
- * @property {{privateSessionId: (senderId: string) => string, groupSessionId: (chatId: string) => string}} sessions
+ * @property {{privateSessionId: (senderId: string) => string, groupSessionId: (chatId: string) => string, groupSenderSessionId?: (chatId: string, senderId: string) => string|null}} sessions
  * @property {{parseCommand: Function, handleCommand: Function}} memory
  * @property {{route: (text: string) => {handled: boolean, response?: string}}} [commands]
  * @property {{getUrls: Function, isDownloadRequest: Function, download: Function, getFailureMessage: Function}} video
@@ -49,16 +49,15 @@ import {
 export function createMessageService(dependencies) {
   const activeSessions = new Set();
 
-  async function saveSubmittedConversationTurn(sessionId, userText, assistantText, emitStage) {
+  async function saveSubmittedConversationTurn(sessionIds, userText, assistantText, emitStage) {
     try {
       if (typeof dependencies.history.saveConversationTurn !== 'function') {
         throw new TypeError('An atomic conversation history writer is required.');
       }
-      await dependencies.history.saveConversationTurn(
-        sessionId,
-        userText,
-        assistantText,
-      );
+      const scopes = Array.isArray(sessionIds) ? sessionIds : [sessionIds];
+      for (const sessionId of [...new Set(scopes.filter(Boolean))]) {
+        await dependencies.history.saveConversationTurn(sessionId, userText, assistantText);
+      }
       emitStage('history_persistence', 'succeeded');
     } catch (error) {
       // The send call returned a message result, but recipient delivery is not
@@ -130,11 +129,12 @@ export function createMessageService(dependencies) {
         if (typeof dependencies.history.save !== 'function') {
           throw new TypeError('A user-message history writer is required.');
         }
-        await dependencies.history.save(
-          pendingUserTurn.sessionId,
-          'user',
-          pendingUserTurn.content,
-        );
+        const scopes = Array.isArray(pendingUserTurn.sessionIds)
+          ? pendingUserTurn.sessionIds
+          : [pendingUserTurn.sessionIds];
+        for (const sessionId of [...new Set(scopes.filter(Boolean))]) {
+          await dependencies.history.save(sessionId, 'user', pendingUserTurn.content);
+        }
         emitStage('inbound_history_persistence', 'succeeded');
       } catch (error) {
         emitStage('inbound_history_persistence', 'failed', error);
@@ -287,6 +287,9 @@ export function createMessageService(dependencies) {
           identityStatus: senderIdentity?.status || 'unavailable',
         });
       }
+      const senderGroupSession = isGroup && dependencies.sessions.groupSenderSessionId
+        ? dependencies.sessions.groupSenderSessionId(message.chatId, message.senderId)
+        : null;
       const personalMemorySession = senderIdentity?.status === 'verified'
         ? dependencies.sessions.privateSessionId(senderIdentity.principalId)
         : privateSession;
@@ -338,7 +341,10 @@ export function createMessageService(dependencies) {
       // Serialize by the conversation being processed. Group turns use the
       // shared group session; locking them by the sender's private session
       // incorrectly blocks that sender's independent private conversation.
-      const activeSessionId = sharedGroupSession || privateSession;
+      const conversationSessionIds = isGroup
+        ? [...new Set([senderGroupSession, sharedGroupSession].filter(Boolean))]
+        : [privateSession];
+      const activeSessionId = senderGroupSession || sharedGroupSession || privateSession;
       if (activeSessions.has(activeSessionId)) {
         await submitReply(
           'Sebentar ya, aku masih memproses pesan sebelumnya.',
@@ -347,7 +353,7 @@ export function createMessageService(dependencies) {
       }
 
       pendingUserTurn = {
-        sessionId: activeSessionId,
+        sessionIds: conversationSessionIds,
         content: isGroup ? `${senderName}: ${question}` : question,
       };
       activeSessions.add(activeSessionId);
@@ -480,14 +486,12 @@ export function createMessageService(dependencies) {
                 return;
               }
 
-              const stickerSession =
-                sharedGroupSession || privateSession;
               const userMessage = isGroup
                 ? `${senderName}: ${question}`
                 : question;
 
               await saveSubmittedConversationTurn(
-                stickerSession,
+                conversationSessionIds,
                 userMessage,
                 'Stiker berhasil dibuat dan dikirim.',
                 emitStage,
@@ -549,13 +553,12 @@ export function createMessageService(dependencies) {
             return;
           }
 
-          const activeSession = sharedGroupSession || privateSession;
           const userMessage = isGroup
             ? `${senderName}: ${question}`
             : question;
 
           await saveSubmittedConversationTurn(
-            activeSession,
+            conversationSessionIds,
             userMessage,
             `Gambar dibuat untuk permintaan: ${question}`,
             emitStage,
@@ -577,6 +580,7 @@ export function createMessageService(dependencies) {
           privateSession,
           personalMemorySession,
           sharedGroupSession,
+          senderGroupSession,
           senderName,
           senderIdentity,
           image,
@@ -674,7 +678,7 @@ export function createMessageService(dependencies) {
           if (assistantResponseSubmitted) {
             const userText = isGroup ? `${senderName}: ${question}` : question;
             await saveSubmittedConversationTurn(
-              sharedGroupSession || privateSession,
+              conversationSessionIds,
               userText,
               answer,
               emitStage,
@@ -699,7 +703,7 @@ export function createMessageService(dependencies) {
           }
           const userText = isGroup ? `${senderName}: ${question}` : question;
           await saveSubmittedConversationTurn(
-            sharedGroupSession || privateSession,
+            conversationSessionIds,
             userText,
             answer,
             emitStage,
