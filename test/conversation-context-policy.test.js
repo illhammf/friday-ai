@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isConversationCorrection,
+  isSocialRepairQuestion,
   isContinuationRequest,
   isAmbiguousReference,
   isExplicitTopicSwitch,
@@ -153,6 +154,19 @@ test('ambiguous references do not guess an old topic', () => {
   ], 'Bagaimana dengan yang tadi?');
   assert.deepEqual(selected.history, []);
   assert.equal(selected.intent, 'ambiguous_reference');
+});
+
+test('social repair keeps only the immediately preceding exchange', () => {
+  assert.equal(isSocialRepairQuestion('Kok nggak ada lovenya?'), true);
+  const history = [
+    entry('user', 'Tanggal berapa sekarang?'),
+    entry('model', 'Hari ini Kamis.'),
+    entry('user', 'Makasih ❤️'),
+    entry('model', 'Sama-sama.'),
+  ];
+  const selected = selectConversationContext(history, 'Kok nggak ada lovenya?');
+  assert.deepEqual(selected.history, history.slice(-2));
+  assert.equal(selected.intent, 'social_repair');
 });
 
 test('after a switch, active-topic questions keep Java context but not old Dart context', () => {

@@ -77,3 +77,27 @@ test('terminal write failures are isolated from the caller', () => {
   const presenter = createTerminalPresenter({ stream, errorStream: stream });
   assert.doesNotThrow(() => presenter.stage('application_error', { outcome: 'failed' }));
 });
+
+test('human metrics label input, output, total tokens, and rejection reasons explicitly', () => {
+  const stream = sink({ tty: false });
+  const presenter = createTerminalPresenter({ stream, errorStream: stream, color: false });
+  presenter.stage('ai_provider_response', {
+    outcome: 'completed',
+    durationMs: 1200,
+    inputTokens: 4200,
+    outputTokens: 180,
+    totalTokens: 4380,
+    attempt: 2,
+  });
+  presenter.stage('message_received', {
+    outcome: 'rejected',
+    category: 'validation_error',
+    rejectReason: 'group_prefix_required',
+  });
+  assert.match(stream.text(), /input=4200/);
+  assert.match(stream.text(), /output=180/);
+  assert.match(stream.text(), /total=4380/);
+  assert.match(stream.text(), /attempt=2/);
+  assert.match(stream.text(), /MESSAGE REJECTED.*group_prefix_required/);
+  assert.doesNotMatch(stream.text(), /4380 tokens/);
+});

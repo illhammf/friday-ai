@@ -14,6 +14,7 @@ const GENERIC_CONTEXT_TERMS = new Set([
 const TOPIC_SWITCH_PATTERN = /\b(?:sekarang|now|ganti|switch|pindah|beralih|bahas|membahas|discuss|let['’]?s\s+(?:discuss|talk)|let's)\b/i;
 const HISTORICAL_RECALL_PATTERN = /\b(?:sebelumnya|sebelum|tadi|barusan|yang\s+(?:aku|saya)\s+(?:bilang|ceritakan|minta)|apa\s+yang\s+(?:aku|saya)|previous(?:ly)?|earlier|before|what\s+did\s+i)\b/i;
 const CONTINUATION_PATTERN = /^(?:lanjut(?:kan)?|terus(?: bagaimana)?|jelaskan\s+(?:bagian|yang)\s+(?:itu|kedua|tadi)|berikan\s+contoh(?:nya)?|contohnya|bisa\s+(?:lebih\s+)?detail|kenapa\s+begitu|how\s+does\s+it\s+work|continue)\b/i;
+const SOCIAL_REPAIR_PATTERN = /\b(?:love|lov(e|enya)|hati|emoji|emot|hangat|hangatnya|manis|kurang\s+hangat)\b/i;
 
 function messageText(message) {
   return (message?.parts || [])
@@ -50,6 +51,11 @@ export function isPreviousTopicRecallQuestion(question) {
 
 export function isConversationCorrection(question) {
   return /\b(?:ngaco|salah|bukan|yakin|harusnya|seharusnya|jangan|gausah|gak\s+usah|nggak\s+usah|tidak\s+usah|masih\s+ikut)\b/i.test(String(question || ''));
+}
+
+export function isSocialRepairQuestion(question) {
+  return SOCIAL_REPAIR_PATTERN.test(String(question || '')) &&
+    /\b(?:kok|kenapa|mana|kurang|nggak|gak|ga|tidak|tadi|belum|pakai|pake|ada)\b/i.test(String(question || ''));
 }
 
 export function isOpenTopicQuestion(question) {
@@ -103,15 +109,6 @@ export function selectConversationContext(history, question, {
       intent: 'identity',
     });
   }
-  if (isConversationCorrection(question)) {
-    return Object.freeze({
-      history: Object.freeze([]),
-      recentCount: 0,
-      relevantEarlierCount: 0,
-      excludedEarlierCount: entries.length,
-      intent: 'correction',
-    });
-  }
   if (isOpenTopicQuestion(question)) {
     return Object.freeze({
       history: Object.freeze([]),
@@ -119,6 +116,24 @@ export function selectConversationContext(history, question, {
       relevantEarlierCount: 0,
       excludedEarlierCount: entries.length,
       intent: 'open_topic',
+    });
+  }
+  if (isSocialRepairQuestion(question)) {
+    return Object.freeze({
+      history: Object.freeze(entries.slice(-2)),
+      recentCount: Math.min(entries.length, 2),
+      relevantEarlierCount: 0,
+      excludedEarlierCount: Math.max(0, entries.length - 2),
+      intent: 'social_repair',
+    });
+  }
+  if (isConversationCorrection(question)) {
+    return Object.freeze({
+      history: Object.freeze([]),
+      recentCount: 0,
+      relevantEarlierCount: 0,
+      excludedEarlierCount: entries.length,
+      intent: 'correction',
     });
   }
   if (isExplicitTopicSwitch(question)) {
@@ -259,6 +274,7 @@ export function getConversationIntentInstruction(intent) {
     active_topic: 'Jawab berdasarkan topik aktif terbaru. Jangan merangkum seluruh riwayat atau mengulang pertanyaan lama yang tidak relevan.',
     previous_topic_recall: 'Pengguna menanyakan topik yang diajukan sebelum perpindahan topik. Gunakan pertukaran tepat sebelum switch; bedakan topik yang baru diusulkan dari materi yang benar-benar sudah dibahas.',
     correction: 'Pengguna sedang mengoreksi respons atau gaya FRIDAY. Akui singkat, minta maaf bila sesuai, dan terapkan koreksi tanpa mengulang sapaan atau topik lama.',
+    social_repair: 'Pengguna meminta perbaikan respons sosial sebelumnya, misalnya reaksi hangat atau emoji yang terlewat. Balas singkat, hangat, dan langsung perbaiki; jangan defensif, jangan menjelaskan panjang, dan jangan memaksakan emoji di luar konteks.',
     continuation: 'Pesan terbaru melanjutkan topik aktif. Gunakan pertukaran relevan terakhir dan jawab langsung.',
     ambiguous_reference: 'Referensi pengguna belum cukup jelas. Jangan menebak; minta pengguna menyebutkan topik atau bagian yang dimaksud secara singkat.',
     conversation: 'Jawab pesan terbaru dengan konteks percakapan yang relevan saja.',

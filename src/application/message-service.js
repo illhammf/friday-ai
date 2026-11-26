@@ -88,6 +88,7 @@ export function createMessageService(dependencies) {
         ...(Number.isFinite(metadata.inputTokens) ? { inputTokens: metadata.inputTokens } : {}),
         ...(Number.isFinite(metadata.outputTokens) ? { outputTokens: metadata.outputTokens } : {}),
         ...(Number.isFinite(metadata.totalTokens) ? { totalTokens: metadata.totalTokens } : {}),
+        ...(Number.isInteger(metadata.attempt) && metadata.attempt > 0 && metadata.attempt <= 10 ? { attempt: metadata.attempt } : {}),
         ...(typeof metadata.operation === 'string' ? { operation: metadata.operation.slice(0, 80) } : {}),
         ...(metadata.providerId === 'google-gemini' ? { providerId: metadata.providerId } : {}),
         ...(typeof metadata.modelId === 'string' && /^[A-Za-z0-9._/-]{1,100}$/.test(metadata.modelId)

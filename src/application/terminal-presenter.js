@@ -78,14 +78,19 @@ export function createTerminalPresenter({
     const [label, tone] = STAGES[stageName] || ['RUNTIME', 'cyan'];
     let outcome = fields.outcome === 'submitted' ? 'ANSWER SUBMITTED'
       : fields.outcome === 'uncertain' ? 'DELIVERY UNCERTAIN'
+        : fields.outcome === 'rejected' ? 'MESSAGE REJECTED'
         : fields.outcome === 'failed' ? 'FAILED'
           : label;
     const details = [
       fields.modelId ? `model ${fields.modelId}` : '',
       fields.nextModelId ? `next ${fields.nextModelId}` : '',
       Number.isFinite(fields.durationMs) ? `${fields.durationMs}ms` : '',
-      Number.isFinite(fields.totalTokens) ? `${fields.totalTokens} tokens` : '',
+      Number.isFinite(fields.inputTokens) ? `input=${fields.inputTokens}` : '',
+      Number.isFinite(fields.outputTokens) ? `output=${fields.outputTokens}` : '',
+      Number.isFinite(fields.totalTokens) ? `total=${fields.totalTokens}` : '',
+      Number.isInteger(fields.attempt) ? `attempt=${fields.attempt}` : '',
       fields.category ? fields.category : '',
+      fields.rejectReason ? fields.rejectReason : '',
       fields.identityStatus ? `identity ${fields.identityStatus}` : '',
       Number.isInteger(fields.httpStatus) ? `HTTP ${fields.httpStatus}` : '',
     ].filter(Boolean).join(' · ');

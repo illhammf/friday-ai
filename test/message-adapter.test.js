@@ -10,6 +10,7 @@ import {
   createMessageDeduplicator,
   createMessageQueue,
   getMessageDeduplicationKey,
+  getMessageRejectionReason,
   isQueueableMessage,
 } from '../src/whatsapp/message-queue.js';
 import { createMessageService } from '../src/application/message-service.js';
@@ -127,6 +128,14 @@ test('handles missing optional metadata, invalid IDs, and invalid messages safel
   assert.equal(invalidFields.text, '');
   assert.equal(invalidFields.messageType, 'unknown');
   assert.equal(Number.isNaN(invalidFields.timestamp), true);
+});
+
+test('maps inbound validation outcomes to safe rejection reasons', () => {
+  assert.equal(getMessageRejectionReason(createRawMessage({ fromMe: true }), 'Friday'), 'from_me');
+  assert.equal(getMessageRejectionReason(createRawMessage({ from: '' }), 'Friday'), 'missing_from');
+  assert.equal(getMessageRejectionReason(createRawMessage({ body: '' }), 'Friday'), 'unsupported_content');
+  assert.equal(getMessageRejectionReason(createRawMessage({ from: 'room@g.us', body: 'hello' }), 'Friday'), 'group_prefix_required');
+  assert.equal(getMessageRejectionReason(createRawMessage({ from: 'room@g.us', body: 'Friday hello' }), 'Friday'), null);
 });
 
 test('delegates media download within the adapter without passing raw SDK data to consumers', async () => {

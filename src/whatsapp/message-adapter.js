@@ -2,6 +2,7 @@ import {
   createConversationCorrelationId,
   classifyConversationError,
 } from '../application/conversation-observability.js';
+import { getMessageRejectionReason } from './message-queue.js';
 
 /**
  * Converts a whatsapp-web.js message into the transport-neutral contract used
@@ -151,11 +152,13 @@ export function registerQueuedMessageHandler(
       });
       return;
     }
-    if (!isQueueableMessage(message, botName)) {
+    const rejectionReason = getMessageRejectionReason(message, botName);
+    if (rejectionReason) {
       logger.stage?.('message_received', {
         correlationId,
         outcome: 'rejected',
         category: 'validation_error',
+        rejectReason: rejectionReason,
       });
       return;
     }
@@ -167,6 +170,7 @@ export function registerQueuedMessageHandler(
         correlationId,
         outcome: 'rejected',
         category: 'validation_error',
+        rejectReason: 'duplicate_message_id',
       });
       return;
     }
@@ -182,6 +186,7 @@ export function registerQueuedMessageHandler(
           correlationId,
           outcome: 'rejected',
           category: 'validation_error',
+          rejectReason: 'normalization_failed',
         });
         return undefined;
       }
@@ -196,6 +201,7 @@ export function registerQueuedMessageHandler(
         correlationId,
         outcome: 'rejected',
         category: 'validation_error',
+        rejectReason: 'queue_full',
       });
       void Promise.resolve().then(() => reply(message)(
         'Aku masih memproses beberapa pesan di chat ini. Pesan baru ini belum masuk antrean, coba kirim lagi sebentar ya.',

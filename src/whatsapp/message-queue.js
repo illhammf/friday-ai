@@ -99,20 +99,30 @@ function finish(key, queue, queues) {
 }
 
 export function isQueueableMessage(message, botName) {
+  return getMessageRejectionReason(message, botName) === null;
+}
+
+export function getMessageRejectionReason(message, botName) {
   if (
-    message?.fromMe ||
-    !message?.from ||
+    message?.fromMe
+  ) {
+    return 'from_me';
+  }
+  if (!message?.from) {
+    return 'missing_from';
+  }
+  if (
     (
       message.type !== 'ptt' &&
       message.type !== 'image' &&
       !message.body?.trim()
     )
   ) {
-    return false;
+    return 'unsupported_content';
   }
 
   if (!message.from.endsWith('@g.us')) {
-    return true;
+    return null;
   }
 
   const escapedName = String(botName).replace(
@@ -121,5 +131,7 @@ export function isQueueableMessage(message, botName) {
   );
   const prefix = new RegExp(`^${escapedName}\\b[\\s,:-]*`, 'i');
 
-  return prefix.test(message.body?.trim() || '');
+  return prefix.test(message.body?.trim() || '')
+    ? null
+    : 'group_prefix_required';
 }

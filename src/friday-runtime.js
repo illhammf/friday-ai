@@ -143,10 +143,12 @@ async function generateWithRetry(model, contents, config, logStage) {
   const maxAttempts = 2;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const attemptStartedAt = Date.now();
     try {
       const providerContext = {
         providerId: 'google-gemini',
         modelId: model,
+        attempt,
         handlerExecutionStarted: false,
       };
       logStage?.('ai_provider_attempt', 'started', undefined, providerContext);
@@ -155,15 +157,22 @@ async function generateWithRetry(model, contents, config, logStage) {
         contents,
         config,
       });
-      logStage?.('ai_provider_attempt', 'completed', undefined, providerContext);
+      logStage?.('ai_provider_attempt', 'completed', undefined, {
+        ...providerContext,
+        durationMs: Date.now() - attemptStartedAt,
+      });
       return response;
     } catch (error) {
       logStage?.('ai_provider_attempt', 'failed', error,
-        getSafeProviderErrorMetadata(error, {
+        {
+          ...getSafeProviderErrorMetadata(error, {
           providerId: 'google-gemini',
           modelId: model,
           handlerExecutionStarted: false,
-        }));
+          }),
+          attempt,
+          durationMs: Date.now() - attemptStartedAt,
+        });
       if (!isTemporaryGeminiError(error) || attempt === maxAttempts) {
         throw error;
       }
@@ -175,11 +184,14 @@ async function generateWithRetry(model, contents, config, logStage) {
       const delayMs = 1500 * attempt;
 
       logStage?.('ai_retry_scheduled', 'continued', error,
-        getSafeProviderErrorMetadata(error, {
+        {
+          ...getSafeProviderErrorMetadata(error, {
           providerId: 'google-gemini',
           modelId: model,
           handlerExecutionStarted: false,
-        }));
+          }),
+          attempt,
+        });
 
       await sleep(delayMs);
     }
@@ -295,7 +307,7 @@ function safeConversationLogMetadata(fields) {
       .map((key) => [key, fields[key]]),
   );
   const metadata = { ...numeric };
-  for (const key of ['providerId', 'modelId', 'nextModelId', 'errorName', 'providerErrorCode', 'identityStatus']) {
+  for (const key of ['providerId', 'modelId', 'nextModelId', 'errorName', 'providerErrorCode', 'identityStatus', 'rejectReason']) {
     const value = fields[key];
     if (
       typeof value === 'string' &&
@@ -310,6 +322,9 @@ function safeConversationLogMetadata(fields) {
   if (typeof fields.retryable === 'boolean') metadata.retryable = fields.retryable;
   if (typeof fields.handlerExecutionStarted === 'boolean') {
     metadata.handlerExecutionStarted = fields.handlerExecutionStarted;
+  }
+  if (Number.isInteger(fields.attempt) && fields.attempt > 0 && fields.attempt <= 10) {
+    metadata.attempt = fields.attempt;
   }
   if (typeof fields.operation === 'string') metadata.operation = fields.operation.slice(0, 80);
   return metadata;
