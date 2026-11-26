@@ -743,6 +743,53 @@ test('transcribes incoming voice notes and uses the voice reply delivery path', 
   assert.equal(calls.some(([type]) => type === 'reply'), false);
 });
 
+test('passes the generated explanation to TTS for explicit voice requests', async () => {
+  const { calls, service } = createHarness({
+    assistant: {
+      ask: async (input) => {
+        calls.push(['ask', input]);
+        return 'Git Clone menyalin repository Git ke komputer kamu.';
+      },
+    },
+    audio: {
+      generate: async (text) => {
+        calls.push(['generateVoice', text]);
+        return { path: '/tmp/reply.ogg', cleanup: async () => {} };
+      },
+    },
+    deliver: {
+      sendVoice: async (...args) => {
+        calls.push(['sendVoice', ...args]);
+        return { id: 'voice-result' };
+      },
+    },
+  });
+
+  await service.handle(
+    createMessage({ text: 'Jelaskan apa itu Git Clone pakai VN yaa' }),
+    createMessenger(calls),
+  );
+
+  const ask = calls.find(([type]) => type === 'ask');
+  assert.equal(ask[1].voiceRequested, true);
+  assert.deepEqual(
+    calls.find(([type]) => type === 'generateVoice'),
+    ['generateVoice', 'Git Clone menyalin repository Git ke komputer kamu.'],
+  );
+  assert.equal(calls.some(([type]) => type === 'reply'), false);
+});
+
+test('answers unsupported leave-group jokes honestly without invoking the assistant', async () => {
+  const { calls, service } = createHarness();
+  await service.handle(
+    createMessage({ text: 'Friday leave aja dari grup wkwk' }),
+    createMessenger(calls),
+  );
+  assert.equal(calls.some(([type]) => type === 'ask'), false);
+  const reply = calls.find(([type]) => type === 'reply');
+  assert.match(reply[1], /nggak bisa leave grup/i);
+});
+
 test('persists an assistant turn atomically after outbound reply delivery', async () => {
   const { calls, service } = createHarness();
 

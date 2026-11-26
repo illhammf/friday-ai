@@ -70,6 +70,7 @@ import {
   isSharedGroupRecallQuestion,
   selectConversationContext,
 } from './ai/conversation-context-policy.js';
+import { isVoiceResponseRequest } from './ai/action-intent.js';
 import { createMessageService } from './application/message-service.js';
 import { createTerminalPresenter } from './application/terminal-presenter.js';
 import {
@@ -333,6 +334,7 @@ function safeConversationLogMetadata(fields) {
   // Fungsi utama untuk mengajukan pertanyaan ke FRIDAY dan mendapatkan jawaban.
   async function askFriday({
     question,
+    voiceRequested = false,
     privateSession,
     personalMemorySession = privateSession,
     sharedGroupSession = null,
@@ -396,6 +398,9 @@ function safeConversationLogMetadata(fields) {
       systemInstruction: [
         systemInstruction,
         runtimeTemporalInstruction(runtimeClock),
+        (voiceRequested || isVoiceResponseRequest(question))
+          ? 'FORMAT JAWABAN: VOICE NOTE\nJawab substansi yang diminta pengguna secara langsung. Teks jawaban ini akan dibacakan sebagai audio; jangan menyebut proses internal, provider, pembuatan audio, pengiriman, atau status pemrosesan. Buat penjelasan speech-ready yang natural dan lengkap sesuai pertanyaan.'
+          : '',
         isGroup
           ? (useSharedGroupContext
             ? 'Ini adalah permintaan ringkasan diskusi grup. Sumber: CURRENT_MESSAGE + SHARED_GROUP_CONTEXT. Gunakan hanya shared group context yang tersedia dan jangan menganggap pernyataan peserta lain sebagai fakta pribadi pengirim saat ini.'

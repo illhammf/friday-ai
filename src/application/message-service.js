@@ -3,6 +3,11 @@ import {
   classifyConversationError,
   createConversationCorrelationId,
 } from './conversation-observability.js';
+import {
+  classifyUnsupportedAction,
+  getUnsupportedActionResponse,
+  isVoiceResponseRequest,
+} from '../ai/action-intent.js';
 
 /**
  * @typedef {Object} NormalizedIncomingMessage
@@ -269,6 +274,17 @@ export function createMessageService(dependencies) {
           }
           return;
         }
+      }
+
+      const unsupportedAction = classifyUnsupportedAction(question);
+      if (unsupportedAction) {
+        const playful = /\b(?:wkwk+|haha+|hehe+|hehw|😂|🤣)\b/i.test(question);
+        try {
+          await submitReply(getUnsupportedActionResponse(unsupportedAction, { playful }));
+        } catch {
+          // The transport stage records an uncertain result; never resend.
+        }
+        return;
       }
 
       const socialVideoUrls = dependencies.video.getUrls(question);
@@ -585,12 +601,15 @@ export function createMessageService(dependencies) {
           return;
         }
 
+        const asksForVoice = isVoiceResponseRequest(question);
+
         emitStage('message_routed', 'accepted');
         emitStage('ai_request', 'started');
         let answer;
         try {
           answer = await dependencies.assistant.ask({
           question,
+          voiceRequested: asksForVoice || isVoiceNote,
           privateSession,
           personalMemorySession,
           sharedGroupSession,
@@ -608,12 +627,6 @@ export function createMessageService(dependencies) {
           failureStageLogged = true;
           throw error;
         }
-
-        const asksForVoice =
-          /\b(?:vn|voice[\s-]?note|voice message|pesan suara)\b/i.test(question) ||
-          /\b(?:balas|jawab|bales)(?:lah)?\b.{0,100}\b(?:pakai|pake|dengan|menggunakan|lewat|melalui)\s+(?:vn|suara|voice[\s-]?note|audio)\b/i.test(question) ||
-          /\b(?:kirim|buat|bikin|ubah|jadikan)\b.{0,60}\b(?:vn|voice[\s-]?note|pesan suara)\b/i.test(question) ||
-          /\b(?:ngomong|berbicara|ucapkan|bacakan)\b/i.test(question);
 
         if (isVoiceNote || asksForVoice) {
           let audioResult = null;
