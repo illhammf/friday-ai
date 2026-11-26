@@ -13,6 +13,7 @@ const GENERIC_CONTEXT_TERMS = new Set([
 ]);
 const TOPIC_SWITCH_PATTERN = /\b(?:sekarang|now|ganti|switch|pindah|beralih|bahas|membahas|discuss|let['’]?s\s+(?:discuss|talk)|let's)\b/i;
 const HISTORICAL_RECALL_PATTERN = /\b(?:sebelumnya|sebelum|tadi|barusan|yang\s+(?:aku|saya)\s+(?:bilang|ceritakan|minta)|apa\s+yang\s+(?:aku|saya)|previous(?:ly)?|earlier|before|what\s+did\s+i)\b/i;
+const CONTINUATION_PATTERN = /^(?:lanjut(?:kan)?|terus(?: bagaimana)?|jelaskan\s+(?:bagian|yang)\s+(?:itu|kedua|tadi)|berikan\s+contoh(?:nya)?|contohnya|bisa\s+(?:lebih\s+)?detail|kenapa\s+begitu|how\s+does\s+it\s+work|continue)\b/i;
 
 function messageText(message) {
   return (message?.parts || [])
@@ -48,7 +49,7 @@ export function isPreviousTopicRecallQuestion(question) {
 }
 
 export function isConversationCorrection(question) {
-  return /\b(?:kok|kenapa|harusnya|seharusnya|jangan|gausah|gak\s+usah|nggak\s+usah|tidak\s+usah|masih\s+ikut|salah)\b/i.test(String(question || ''));
+  return /\b(?:ngaco|salah|bukan|yakin|harusnya|seharusnya|jangan|gausah|gak\s+usah|nggak\s+usah|tidak\s+usah|masih\s+ikut)\b/i.test(String(question || ''));
 }
 
 export function isOpenTopicQuestion(question) {
@@ -65,6 +66,14 @@ export function isExplicitTopicSwitch(question) {
 
 export function isHistoricalRecallQuestion(question) {
   return HISTORICAL_RECALL_PATTERN.test(String(question || ''));
+}
+
+export function isContinuationRequest(question) {
+  return CONTINUATION_PATTERN.test(String(question || '').trim());
+}
+
+export function isAmbiguousReference(question) {
+  return /^(?:bagaimana\s+dengan\s+(?:yang\s+)?tadi|terus\s+bagaimana\s+dengan\s+itu|jelaskan\s+itu|lanjutkan\s+yang\s+tadi)\s*\??$/i.test(String(question || '').trim());
 }
 
 /**
@@ -122,6 +131,15 @@ export function selectConversationContext(history, question, {
       intent: 'topic_switch',
     });
   }
+  if (isAmbiguousReference(question)) {
+    return Object.freeze({
+      history: Object.freeze([]),
+      recentCount: 0,
+      relevantEarlierCount: 0,
+      excludedEarlierCount: entries.length,
+      intent: 'ambiguous_reference',
+    });
+  }
   if (isRecentHistoryQuestion(question) && !isPreviousTopicRecallQuestion(question)) {
     return Object.freeze({
       history: Object.freeze(entries.slice(-RECENT_RECALL_MESSAGES)),
@@ -129,6 +147,24 @@ export function selectConversationContext(history, question, {
       relevantEarlierCount: 0,
       excludedEarlierCount: Math.max(0, entries.length - RECENT_RECALL_MESSAGES),
       intent: 'recent_recall',
+    });
+  }
+  if (isHistoricalRecallQuestion(question) && !isPreviousTopicRecallQuestion(question)) {
+    return Object.freeze({
+      history: Object.freeze(entries.slice(-recentLimit)),
+      recentCount: Math.min(entries.length, recentLimit),
+      relevantEarlierCount: 0,
+      excludedEarlierCount: Math.max(0, entries.length - recentLimit),
+      intent: 'historical_recall',
+    });
+  }
+  if (isContinuationRequest(question)) {
+    return Object.freeze({
+      history: Object.freeze(entries.slice(-recentLimit)),
+      recentCount: Math.min(entries.length, recentLimit),
+      relevantEarlierCount: 0,
+      excludedEarlierCount: Math.max(0, entries.length - recentLimit),
+      intent: 'continuation',
     });
   }
   const recent = entries.slice(-recentLimit);
@@ -150,6 +186,22 @@ export function selectConversationContext(history, question, {
     .map(({ index }) => index)
     .sort((left, right) => left - right);
   const selectedEarlier = relevantIndexes.map((index) => earlier[index]);
+  const recentTerms = new Set(
+    recent.flatMap((message) => [...getMemoryTerms(messageText(message))]),
+  );
+  const questionTerms = [...terms];
+  const recentRelevant = questionTerms.some((term) => recentTerms.has(term));
+
+  if (!isContinuationRequest(question) && !recentRelevant && selectedEarlier.length === 0) {
+    return Object.freeze({
+      history: Object.freeze([]),
+      recentCount: 0,
+      relevantEarlierCount: 0,
+      excludedEarlierCount: entries.length,
+      topicSwitch: false,
+      intent: 'conversation',
+    });
+  }
 
   const latestTopicSwitch = entries.reduce(
     (latest, message, index) => message?.role === 'user' &&
@@ -203,9 +255,12 @@ export function getConversationIntentInstruction(intent) {
     open_topic: 'Pengguna ingin memilih topik baru. Tanggapi santai dan tanyakan topik yang ingin dibahas tanpa menghidupkan topik lama.',
     topic_switch: 'Pesan terbaru menetapkan topik baru. Fokuskan jawaban pada topik baru dan jangan membawa topik lama kecuali diminta.',
     recent_recall: 'Pengguna meminta ringkasan percakapan terbaru. Gunakan pesan terbaru yang benar-benar tersedia; jangan menyebut sesi kosong jika konteks tersedia.',
+    historical_recall: 'Pengguna meminta informasi historis. Gunakan history yang tersedia tanpa menjadikan topik lama sebagai topik aktif setelah jawaban ini.',
     active_topic: 'Jawab berdasarkan topik aktif terbaru. Jangan merangkum seluruh riwayat atau mengulang pertanyaan lama yang tidak relevan.',
     previous_topic_recall: 'Pengguna menanyakan topik yang diajukan sebelum perpindahan topik. Gunakan pertukaran tepat sebelum switch; bedakan topik yang baru diusulkan dari materi yang benar-benar sudah dibahas.',
     correction: 'Pengguna sedang mengoreksi respons atau gaya FRIDAY. Akui singkat, minta maaf bila sesuai, dan terapkan koreksi tanpa mengulang sapaan atau topik lama.',
+    continuation: 'Pesan terbaru melanjutkan topik aktif. Gunakan pertukaran relevan terakhir dan jawab langsung.',
+    ambiguous_reference: 'Referensi pengguna belum cukup jelas. Jangan menebak; minta pengguna menyebutkan topik atau bagian yang dimaksud secara singkat.',
     conversation: 'Jawab pesan terbaru dengan konteks percakapan yang relevan saja.',
   };
   return instructions[intent] || instructions.conversation;

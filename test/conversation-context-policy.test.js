@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isConversationCorrection,
+  isContinuationRequest,
+  isAmbiguousReference,
   isExplicitTopicSwitch,
   isIdentityQuestion,
   isPreviousTopicRecallQuestion,
@@ -117,6 +119,40 @@ test('explicit topic switch starts a clean active-topic context', () => {
   assert.deepEqual(request.contents.map(({ parts }) => parts[0].text), [
     'Sekarang kita bahas Java, aku sedang belajar Inheritance.',
   ]);
+});
+
+test('unrelated substantive topics do not inherit recent history', () => {
+  const selected = selectConversationContext([
+    entry('user', 'Jelaskan inheritance di Java.'),
+    entry('model', 'Inheritance adalah pewarisan class.'),
+  ], 'Sekarang bagaimana cara kerja AES-256-GCM?');
+  assert.deepEqual(selected.history, []);
+});
+
+test('continuation requests retain the active topic', () => {
+  assert.equal(isContinuationRequest('Berikan contohnya'), true);
+  assert.equal(isConversationCorrection('Kenapa begitu?'), false);
+  const selected = selectConversationContext([
+    entry('user', 'Jelaskan inheritance di Java.'),
+    entry('model', 'Inheritance adalah pewarisan class.'),
+  ], 'Berikan contohnya');
+  assert.deepEqual(selected.history, [
+    entry('user', 'Jelaskan inheritance di Java.'),
+    entry('model', 'Inheritance adalah pewarisan class.'),
+  ]);
+  assert.equal(selected.intent, 'continuation');
+});
+
+test('ambiguous references do not guess an old topic', () => {
+  assert.equal(isAmbiguousReference('Bagaimana dengan yang tadi?'), true);
+  const selected = selectConversationContext([
+    entry('user', 'Jelaskan Java.'),
+    entry('model', 'Java explanation.'),
+    entry('user', 'Jelaskan AES.'),
+    entry('model', 'AES explanation.'),
+  ], 'Bagaimana dengan yang tadi?');
+  assert.deepEqual(selected.history, []);
+  assert.equal(selected.intent, 'ambiguous_reference');
 });
 
 test('after a switch, active-topic questions keep Java context but not old Dart context', () => {
